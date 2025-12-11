@@ -1,0 +1,52 @@
+# --- Security (CRITICAL) ---
+.env
+.env.local
+secrets.toml
+*.pem
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Virtual Environments ---
+venv/
+env/
+ENV/
+.venv/
+
+# --- Docker & Database ---
+# Ignore local database dumps or mounted volumes if you change configs later
+postgres_data/
+docker-compose.override.yml
+
+# --- IDEs & OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Project Specific ---
+# Ignore the actual PDF uploads (we want the repo to be code, not data)
+*.pdf
+services/worker/data/

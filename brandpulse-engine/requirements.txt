@@ -1,0 +1,19 @@
+# Database
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.9
+pgvector==0.2.4
+
+# Agent Framework 
+langchain==0.1.0
+langchain-google-genai==0.0.6
+langchain-community==0.0.13
+langgraph==0.0.10  # Added for the ReAct Agent Loop
+
+# Tools & Utilities
+duckduckgo-search==4.1.1
+pypdf==3.17.4
+python-dotenv==1.0.0
+
+# UI
+streamlit==1.30.0
+watchdog==3.0.0
