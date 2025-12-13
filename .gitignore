@@ -1,11 +1,11 @@
-# --- Security (CRITICAL) ---
-.env
-.env.local
-secrets.toml
-*.pem
-*.key
+# Environment Variables
 
-# --- Python ---
+.env
+*.env
+!.env.example
+brandpulse-engine/.env
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -23,30 +23,61 @@ parts/
 sdist/
 var/
 wheels/
-share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
-
-# --- Virtual Environments ---
 venv/
-env/
 ENV/
-.venv/
+env/
+brandpulse-engine/venv/
 
-# --- Docker & Database ---
-# Ignore local database dumps or mounted volumes if you change configs later
-postgres_data/
+# Database & Storage
+*.db
+*.sqlite
+*.sqlite3
+brandpulse-engine/postgres_data/
+brandpulse-engine/uploads/
+
+# =======================
+# Logs
+# =======================
+logs/
+*.log
+brandpulse-engine/logs/
+*.log.*
+
+# =======================
+# Docker
+# =======================
 docker-compose.override.yml
+brandpulse-engine/docker-compose.override.yml
 
-# --- IDEs & OS ---
+# =======================
+# IDE & Editors
+# =======================
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 .DS_Store
-Thumbs.db
 
-# --- Project Specific ---
-# Ignore the actual PDF uploads (we want the repo to be code, not data)
-*.pdf
-services/worker/data/
+# =======================
+# OS Generated
+# =======================
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# =======================
+# Alembic Migrations
+# =======================
+brandpulse-engine/alembic/versions/*.pyc
+
+# =======================
+# Testing
+# =======================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
