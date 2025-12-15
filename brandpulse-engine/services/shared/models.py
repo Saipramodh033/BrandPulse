@@ -12,11 +12,11 @@ SQLAlchemy ORM models defining the data schema for:
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, Enum, Float,
-    ForeignKey, Index, Boolean, CheckConstraint
+    ForeignKey, Index, Boolean, CheckConstraint, text
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
-from pgvector.sqlalchemy import Vector
+from pgvector.sqlalchemy import Vector 
 import enum
 
 Base = declarative_base()
@@ -107,7 +107,7 @@ class Company(Base):
     embedding = Column(Vector(768))  # Google Gemini embedding dimension
     
     # Scheduling Configuration
-    frequency_hours = Column(Integer, nullable=False, default=24)  # Positive integer hours
+    frequency_hours = Column(Float, nullable=False, default=24.0)  # Supports fractional hours (e.g., 0.083 = 5 min)
     status = Column(Enum(CompanyStatusEnum), nullable=False, default=CompanyStatusEnum.ACTIVE)
     next_run_time = Column(DateTime, nullable=False)
     
@@ -132,7 +132,7 @@ class Company(Base):
     
     # Constraints
     __table_args__ = (
-        CheckConstraint('frequency_hours > 0', name='check_frequency_positive'),
+        CheckConstraint('frequency_hours >= 0.016', name='check_frequency_positive'),  # Min: ~1 minute
         Index('idx_company_status_next_run', 'status', 'next_run_time'),  # Scheduler queries
         Index('idx_company_embedding', 'embedding', postgresql_using='ivfflat'),  # Vector search
     )
@@ -245,7 +245,7 @@ class EmailLog(Base):
     
     # Delivery Status
     sent_successfully = Column(Boolean, default=False, nullable=False)
-    sendgrid_message_id = Column(String(100))  # For tracking in SendGrid dashboard
+    sendgrid_message_id = Column(String(100))  # Message ID (Resend or legacy SendGrid)
     error_message = Column(Text)  # Populated if sent_successfully = False
     
     # Metadata
@@ -321,47 +321,52 @@ class Metric(Base):
 
 def create_tables(engine):
     """
-    Initialize database schema
-    
-    Creates all tables defined above + pgvector extension
-    Called during first-time setup
+    Create all tables and enable pgvector extension
     
     Args:
         engine: SQLAlchemy engine instance
     """
     # Enable pgvector extension
     with engine.connect() as conn:
-        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         conn.commit()
     
     # Create all tables
-    Base.metadata.create_all(engine)
-    print("✅ Database schema created successfully")
+    Base.metadata.create_all(bind=engine)
+    
+    # Also create PromptConfig table from models_config
+    try:
+        from services.shared.models_config import PromptConfig
+        PromptConfig.__table__.create(bind=engine, checkfirst=True)
+    except Exception:
+        pass  # Table might already exist
+    
+    print("✅ Database tables created successfully")
 
 
 def init_metrics(session):
     """
     Initialize metrics table with default row
     
-    Creates single Metric row if none exists
-    Called after create_tables()
-    
     Args:
         session: SQLAlchemy session instance
     """
-    metric = session.query(Metric).first()
-    if not metric:
+    existing = session.query(Metric).first()
+    
+    if not existing:
         metric = Metric(
             total_insights=0,
             pending_count=0,
             approved_count=0,
             rejected_count=0,
-            total_tokens_used=0,
             total_emails_sent=0,
-            total_apology_emails=0
+            total_apology_emails=0,
+            avg_processing_time=0.0,
+            total_tokens_used=0,
+            last_updated=datetime.utcnow()
         )
         session.add(metric)
         session.commit()
-        print("✅ Metrics table initialized")
+        print("✅ Metrics initialized")
     else:
-        print("ℹ️ Metrics table already exists")
+        print("✅ Metrics already exist")
