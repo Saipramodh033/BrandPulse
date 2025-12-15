@@ -1,0 +1,176 @@
+# ==================================================================
+# Docker Compose Configuration for BrandPulse
+# ==================================================================
+# Services:
+#   - postgres: PostgreSQL 15 + pgvector extension
+#   - worker: Autonomous agent + scheduler (Python)
+#   - dashboard: Streamlit admin interface
+# ==================================================================
+
+services:
+  # ================================================================
+  # PostgreSQL Database with pgvector Extension
+  # ================================================================
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: brandpulse_postgres
+    restart: unless-stopped
+    
+    environment:
+      # Database credentials (loaded from .env file)
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      
+      # PostgreSQL configuration
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.utf8"
+    
+    volumes:
+      # Persistent storage for database files
+      - postgres_data:/var/lib/postgresql/data
+      
+      # Optional: Custom initialization scripts
+      # - ./init-scripts:/docker-entrypoint-initdb.d
+    
+    ports:
+      # Expose to host for debugging (optional, comment out for production)
+      - "5432:5432"
+    
+    healthcheck:
+      # Check if PostgreSQL is ready to accept connections
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    
+    networks:
+      - brandpulse_network
+
+  # ================================================================
+  # Worker Service (Autonomous Agent + Scheduler)
+  # ================================================================
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    
+    container_name: brandpulse_worker
+    restart: unless-stopped
+    
+    depends_on:
+      postgres:
+        condition: service_healthy  # Wait for PostgreSQL to be ready
+    
+    environment:
+      # Database connection
+      DATABASE_URL: ${DATABASE_URL}
+      
+      # Google AI API
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      
+      # Resend Email
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL}
+      SEND_EMAILS: ${SEND_EMAILS:-false}
+      
+      # Tavily Search API
+      TAVILY_API_KEY: ${TAVILY_API_KEY}
+      ENABLE_WEB_SEARCH: ${ENABLE_WEB_SEARCH:-true}
+      
+      # Scheduler settings
+      SCHEDULER_CHECK_INTERVAL: ${SCHEDULER_CHECK_INTERVAL}
+      SCHEDULER_STARTUP_DELAY: ${SCHEDULER_STARTUP_DELAY:-10}
+      
+      # Application config
+      MAX_PDF_SIZE_MB: ${MAX_PDF_SIZE_MB}
+      LOG_LEVEL: ${LOG_LEVEL}
+      
+      # Python environment
+      PYTHONUNBUFFERED: 1  # Real-time log output
+    
+    volumes:
+      # Mount code for development (hot reload)
+      - ./services:/app/services
+      
+      # Shared log directory
+      - ./logs:/app/logs
+      
+      # Templates for email generation
+      - ./templates:/app/templates
+    
+    networks:
+      - brandpulse_network
+    
+    # Keep container running (scheduler runs in background)
+    command: python services/worker/scheduler.py
+
+  # ================================================================
+  # Dashboard Service (Streamlit Admin UI)
+  # ================================================================
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    
+    container_name: brandpulse_dashboard
+    restart: unless-stopped
+    
+    depends_on:
+      postgres:
+        condition: service_healthy
+    
+    environment:
+      # Database connection
+      DATABASE_URL: ${DATABASE_URL}
+      
+      # Admin credentials
+      ADMIN_USERNAME: ${ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      
+      # Application config
+      MAX_PDF_SIZE_MB: ${MAX_PDF_SIZE_MB}
+      LOG_LEVEL: ${LOG_LEVEL}
+      
+      # Google AI (for embeddings when uploading PDFs)
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      
+      # Python environment
+      PYTHONUNBUFFERED: 1
+    
+    ports:
+      # Expose Streamlit to host machine
+      - "8501:8501"
+    
+    volumes:
+      # Mount code for development
+      - ./services:/app/services
+      
+      # Shared log directory
+      - ./logs:/app/logs
+      
+      # Templates (for preview in dashboard)
+      - ./templates:/app/templates
+    
+    networks:
+      - brandpulse_network
+    
+    # Streamlit startup command
+    command: streamlit run services/dashboard/app.py --server.port=8501 --server.address=0.0.0.0
+
+# ==================================================================
+# Volumes (Persistent Storage)
+# ==================================================================
+volumes:
+  postgres_data:
+    driver: local
+    # Data persists even after 'docker-compose down'
+    # To delete: 'docker-compose down -v'
+
+# ==================================================================
+# Networks (Internal Communication)
+# ==================================================================
+networks:
+  brandpulse_network:
+    driver: bridge
+    # Services can communicate via service names
+    # Example: postgres:5432, worker:8000
