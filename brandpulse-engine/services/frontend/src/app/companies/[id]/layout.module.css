@@ -1,0 +1,103 @@
+.workspace {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  height: 60px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  gap: 24px;
+}
+
+.companyInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.companyNameRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.companyNameRow h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.companyMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dotActive { background: var(--status-success); }
+.dotPaused { background: var(--text-muted); }
+
+.statusText { text-transform: capitalize; }
+
+.nextRun { color: var(--text-muted); }
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.tab {
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-radius: 6px;
+  border: 1px solid transparent;
+  text-decoration: none;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tab:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.activeTab {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-color: var(--border-light);
+}
+
+.tabBadge {
+  background: var(--accent-base);
+  color: #000;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 8px;
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+}
