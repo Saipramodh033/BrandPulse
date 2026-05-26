@@ -33,7 +33,8 @@ from services.shared.models import (
     Base, 
     Admin, 
     Company, 
-    Insight,
+    GeneratedIdea,
+    RunLog,
     EmailLog,
     Metric,
     CompanyStatusEnum,
@@ -89,10 +90,19 @@ def init_database(create_admin=True):
     print("\n[3/5] Creating database tables...")
     try:
         Base.metadata.create_all(engine)
+        # Apply self-healing migration for missing region column
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE company_profiles ADD COLUMN IF NOT EXISTS region VARCHAR(100) DEFAULT 'India';"))
+                conn.commit()
+        except Exception as migration_error:
+            print(f"⚠️ Self-healing schema migration warning: {migration_error}")
+            
         print("✅ Tables created successfully:")
         print("   - admins")
         print("   - companies")
-        print("   - insights")
+        print("   - generated_ideas")
+        print("   - run_logs")
         print("   - email_logs")
         print("   - metrics")
     except Exception as e:
@@ -196,7 +206,7 @@ def verify_database():
         try:
             # Check tables exist
             print("\n📋 Tables:")
-            tables = ['admins', 'companies', 'insights', 'email_logs', 'metrics']
+            tables = ['admins', 'companies', 'generated_ideas', 'run_logs', 'email_logs', 'metrics']
             for table in tables:
                 try:
                     result = db.execute(text(f"SELECT COUNT(*) FROM {table}"))
@@ -322,7 +332,7 @@ def main():
     print("\n✅ All done! Database is ready for use.")
     print("\n📝 Next steps:")
     print("   1. Start the worker: docker-compose up worker")
-    print("   2. Access dashboard: http://localhost:8501")
+    print("   2. Access dashboard: http://localhost:3000")
     print(f"   3. Login with username: {os.getenv('ADMIN_USERNAME', 'admin')}")
 
 
