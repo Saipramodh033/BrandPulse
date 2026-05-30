@@ -33,11 +33,11 @@ class CompanyStatusEnum(enum.Enum):
 
 
 class InsightStatusEnum(enum.Enum):
-    """Insight approval workflow states"""
-    PENDING = "pending"      # Awaiting admin review
-    APPROVED = "approved"    # Admin approved, email sent
-    REJECTED = "rejected"    # Admin rejected with feedback or auto-rejected
-    REFINING = "refining"    # Admin requested changes, re-processing
+    """Legacy Insight approval workflow states - kept temporarily for migrations if needed"""
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    REFINING = "refining"
 
 
 class EmailTypeEnum(enum.Enum):
@@ -110,26 +110,34 @@ class Company(Base):
     frequency_hours = Column(Float, nullable=False, default=24.0)  # Supports fractional hours (e.g., 0.083 = 5 min)
     status = Column(Enum(CompanyStatusEnum), nullable=False, default=CompanyStatusEnum.ACTIVE)
     next_run_time = Column(DateTime, nullable=False)
+    is_processing = Column(Boolean, default=False, nullable=False)
     
     # Metadata
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     
     # Relationships
-    insights = relationship(
-        "Insight",
-        back_populates="company",
-        cascade="all, delete-orphan",  # Delete insights when company deleted
-        lazy="dynamic"  # Don't load insights until accessed
-    )
-    
     email_logs = relationship(
         "EmailLog",
         back_populates="company",
         cascade="all, delete-orphan",
         lazy="dynamic"
     )
-    
+
+    generated_ideas = relationship(
+        "GeneratedIdea",
+        back_populates="company",
+        cascade="all, delete-orphan",
+        lazy="dynamic"
+    )
+
+    company_profile = relationship(
+        "CompanyProfile",
+        back_populates="company",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
     # Constraints
     __table_args__ = (
         CheckConstraint('frequency_hours >= 0.016', name='check_frequency_positive'),  # Min: ~1 minute
@@ -141,70 +149,7 @@ class Company(Base):
         return f"<Company(name='{self.name}', frequency={self.frequency_hours}h, status='{self.status.value}')>"
 
 
-# ==================================================================
-# Insight Model
-# ==================================================================
 
-class Insight(Base):
-    """
-    Generated strategic intelligence content
-    
-    Attributes:
-        company_id: Foreign key to Company
-        content: Generated insight text (Markdown formatted)
-        status: Approval workflow state
-        admin_feedback: Refinement instructions from admin or auto-rejection reason
-        processing_time: Agent execution duration (seconds)
-        token_count: LLM token usage for cost tracking
-        email_sent: Whether delivery email was successfully sent
-        
-    Relationships:
-        company: Parent company (many-to-one)
-        email_logs: Emails related to this insight (one-to-many)
-    """
-    __tablename__ = "insights"
-    
-    # Primary Key
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    
-    # Foreign Key Relationship
-    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
-    
-    # Content
-    content = Column(Text, nullable=False)
-    
-    # Workflow State
-    status = Column(Enum(InsightStatusEnum), nullable=False, default=InsightStatusEnum.PENDING)
-    admin_feedback = Column(Text)  # Populated when status = REFINING or auto-rejection reason
-    
-    # Performance Metrics
-    processing_time = Column(Float)  # Seconds
-    token_count = Column(Integer)  # LLM tokens used
-    
-    # Email Delivery (deprecated in favor of EmailLog, but kept for backward compatibility)
-    email_sent = Column(Boolean, default=False)
-    
-    # Metadata
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-    
-    # Relationships
-    company = relationship("Company", back_populates="insights")
-    email_logs = relationship(
-        "EmailLog",
-        back_populates="insight",
-        cascade="all, delete-orphan"
-    )
-    
-    # Indexes
-    __table_args__ = (
-        Index('idx_insight_status', 'status'),  # Dashboard queries for pending insights
-        Index('idx_insight_company_created', 'company_id', 'created_at'),  # History queries
-        Index('idx_insight_company_status', 'company_id', 'status'),  # Check pending count
-    )
-    
-    def __repr__(self):
-        return f"<Insight(id={self.id}, company_id={self.company_id}, status='{self.status.value}')>"
 
 
 # ==================================================================
@@ -236,7 +181,7 @@ class EmailLog(Base):
     
     # Foreign Keys
     company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
-    insight_id = Column(Integer, ForeignKey("insights.id", ondelete="SET NULL"), nullable=True)  # Null for apology emails
+    insight_id = Column(Integer, ForeignKey("generated_ideas.id", ondelete="SET NULL"), nullable=True)  # Null for apology emails
     
     # Email Details
     email_type = Column(Enum(EmailTypeEnum), nullable=False)
@@ -253,7 +198,7 @@ class EmailLog(Base):
     
     # Relationships
     company = relationship("Company", back_populates="email_logs")
-    insight = relationship("Insight", back_populates="email_logs")
+    generated_idea = relationship("GeneratedIdea", backref="email_logs")
     
     # Indexes
     __table_args__ = (
@@ -313,6 +258,154 @@ class Metric(Base):
     def __repr__(self):
         approval_rate = (self.approved_count / self.total_insights * 100) if self.total_insights > 0 else 0
         return f"<Metric(total={self.total_insights}, approval_rate={approval_rate:.1f}%)>"
+
+
+# ==================================================================
+# GeneratedIdea Model (Phase 1 — replaces Insight for new runs)
+# ==================================================================
+
+class IdeaStatusEnum(enum.Enum):
+    """Idea review workflow states"""
+    PENDING = "pending"      # Awaiting admin review
+    APPROVED = "approved"    # Admin approved
+    REJECTED = "rejected"    # Admin rejected
+    REFINING = "refining"    # Admin requested changes
+
+
+class GeneratedIdea(Base):
+    """
+    Structured content idea produced by the ideation engine.
+
+    Each run produces 3-5 of these rows instead of one monolithic Insight.
+    Replaces the Insight model for new runs (old Insight table kept for backward compatibility).
+    """
+    __tablename__ = "generated_ideas"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+
+    # Run linkage
+    run_log_id = Column(Integer, ForeignKey("run_logs.id", ondelete="SET NULL"), nullable=True)
+    evergreen = Column(Boolean, default=False, nullable=False)
+
+    # Angle metadata (populated in Phase 2)
+    angle_category = Column(String(100))
+    angle_detail = Column(Text)
+    is_wildcard = Column(Boolean, default=False)
+
+    # Signal metadata (populated in Phase 3)
+    signal_used = Column(Text)
+
+    # Content
+    idea_summary = Column(Text, nullable=False)  # 1-sentence hook
+    hook = Column(Text)                           # Opening line
+    body = Column(Text)                           # 2-3 sentence body
+    cta = Column(Text)                            # Call to action
+    full_content = Column(Text, nullable=False)   # Hook + body + CTA joined
+    platform = Column(String(50), default='linkedin')
+    implication_type = Column(String(50))         # product/audience/hiring/industry
+
+    # Workflow
+    status = Column(String(20), default='pending', nullable=False)
+    admin_feedback = Column(Text)
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    company = relationship("Company", back_populates="generated_ideas")
+    run_log = relationship("RunLog", back_populates="ideas")
+
+    __table_args__ = (
+        Index('idx_ideas_company_created', 'company_id', 'created_at'),
+        Index('idx_ideas_company_status', 'company_id', 'status'),
+    )
+
+    def __repr__(self):
+        return f"<GeneratedIdea(id={self.id}, company_id={self.company_id}, platform='{self.platform}', status='{self.status}')>"
+
+
+
+# ==================================================================
+# CompanyProfile Model (Phase 2 — structured company intelligence)
+# ==================================================================
+
+class CompanyProfile(Base):
+    """
+    Cached structured profile extracted from company PDF.
+
+    Populated by the profile_company node. Re-extracted only when
+    the company record is updated (last_profiled_at < company.updated_at).
+    """
+    __tablename__ = "company_profiles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"),
+                        nullable=False, unique=True)
+
+    # Structured fields extracted from PDF
+    space = Column(Text)          # Industry/market the company operates in
+    audience = Column(Text)       # Primary target audience
+    content_fit = Column(Text)    # What content topics resonate (JSON string)
+    brand_voice = Column(Text)    # Tone and communication style
+    key_differentiators = Column(Text)  # What makes them unique
+    region = Column(String(100), default='India')  # C4 Fix: region for geo-targeted search
+
+    # Cache control
+    last_profiled_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationship
+    company = relationship("Company", back_populates="company_profile")
+
+    def to_dict(self) -> dict:
+        """Serialise for use in state."""
+        return {
+            'space': self.space,
+            'audience': self.audience,
+            'content_fit': self.content_fit,
+            'brand_voice': self.brand_voice,
+            'key_differentiators': self.key_differentiators,
+            'region': self.region,
+        }
+
+    def __repr__(self):
+        return f"<CompanyProfile(company_id={self.company_id})>"
+
+
+# ==================================================================
+# RunLog Model (Phase 5 — Execution trace storage)
+# ==================================================================
+
+from sqlalchemy.dialects.postgresql import JSONB
+
+class RunLog(Base):
+    """
+    Execution trace of a single ideation run.
+    Stores the full graph execution path and status.
+    """
+    __tablename__ = "run_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    
+    # Trace data
+    trace = Column(JSONB, nullable=False)
+    status = Column(String(50), nullable=False)  # "success", "error", etc.
+    
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    company = relationship("Company")
+    ideas = relationship("GeneratedIdea", back_populates="run_log", lazy="dynamic")
+
+    __table_args__ = (
+        Index('idx_runlog_company_created', 'company_id', 'created_at'),
+    )
+
+    def __repr__(self):
+        return f"<RunLog(id={self.id}, company_id={self.company_id}, status='{self.status}')>"
 
 
 # ==================================================================

@@ -1,7 +1,7 @@
 """
-BrandPulse Worker Scheduler - Main Entry Point
-==============================================
-Orchestrates scheduled tasks using APScheduler
+BrandPulse Worker Scheduler
+===========================
+Entry point for starting the Celery Worker and Celery Beat.
 """
 
 import os
@@ -9,103 +9,20 @@ import sys
 import time
 import logging
 import signal
+import subprocess
 
-from apscheduler.schedulers.blocking import BlockingScheduler
-from apscheduler.triggers.interval import IntervalTrigger
+from services.shared.database import engine, check_database_health
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-
-from services.shared.database import engine, SessionLocal, check_database_health
-from services.worker.tasks.rejection_task import auto_reject_expired_insights
-from services.worker.tasks.refinement_task import process_refinement_requests
-from services.worker.tasks.generation_task import generate_new_insights
-from services.worker.tasks.metrics_task import update_system_metrics
-
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('/app/logs/scheduler.log'),
-        logging.StreamHandler()
-    ]
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-scheduler = None
-shutdown_flag = False
-
-
-def run_scheduled_tasks():
-    """Execute all scheduled tasks in sequence"""
-    logger.info("=" * 70)
-    logger.info("🚀 Scheduler run started")
-    logger.info("=" * 70)
-    
-    session = SessionLocal()
-    
-    try:
-        # Execute tasks
-        auto_reject_expired_insights(session)
-        process_refinement_requests(session)
-        generate_new_insights(session)
-        update_system_metrics(session)
-        
-        logger.info("=" * 70)
-        logger.info("✅ Scheduler run completed")
-        logger.info("=" * 70)
-        
-    except Exception as e:
-        logger.error(f"❌ Scheduler run failed: {e}")
-        session.rollback()
-    finally:
-        session.close()
-
-
-def initialize_scheduler():
-    """Initialize APScheduler"""
-    global scheduler
-    
-    check_interval = int(os.getenv('SCHEDULER_CHECK_INTERVAL', 300))
-    logger.info(f"⚙️ Initializing scheduler (interval: {check_interval}s)")
-    
-    scheduler = BlockingScheduler()
-    scheduler.add_job(
-        func=run_scheduled_tasks,
-        trigger=IntervalTrigger(seconds=check_interval),
-        id='main_scheduler_job',
-        name='BrandPulse Tasks',
-        replace_existing=True,
-        misfire_grace_time=60
-    )
-    
-    logger.info("✅ Scheduler initialized")
-    return scheduler
-
-
-def shutdown_handler(signum, frame):
-    """Handle graceful shutdown"""
-    global shutdown_flag, scheduler
-    
-    logger.info("\n⚠️ Shutdown signal received")
-    shutdown_flag = True
-    
-    if scheduler:
-        scheduler.shutdown(wait=False)
-    
-    logger.info("✅ Scheduler stopped")
-    sys.exit(0)
-
 
 def main():
-    """Main entry point"""
-    global scheduler
-    
-    logger.info("🤖 BrandPulse Worker Starting...")
-    
-    # Register signal handlers
-    signal.signal(signal.SIGINT, shutdown_handler)
-    signal.signal(signal.SIGTERM, shutdown_handler)
+    """Main entry point: wait for DB, then launch Celery"""
+    logger.info("🤖 BrandPulse Worker Starting (Celery)...")
     
     # Startup delay
     startup_delay = int(os.getenv('SCHEDULER_STARTUP_DELAY', 10))
@@ -118,15 +35,34 @@ def main():
         sys.exit(1)
     logger.info("✅ Database healthy")
     
-    # Start scheduler
+    # Auto-migrate: create all tables defined in models if they don't exist yet
+    logger.info("🗄️ Running auto-migration (create_all)...")
     try:
-        scheduler = initialize_scheduler()
-        logger.info("🔄 Scheduler running (Ctrl+C to stop)")
-        scheduler.start()
-    except KeyboardInterrupt:
-        shutdown_handler(None, None)
+        from services.shared.models import Base
+        Base.metadata.create_all(bind=engine)
+        logger.info("✅ Database tables synchronized")
     except Exception as e:
-        logger.error(f"❌ Fatal error: {e}")
+        logger.error(f"❌ Auto-migration failed: {e}")
+    
+    logger.info("🚀 Launching Celery Worker with embedded Beat...")
+    
+    # We use subprocess.run to execute the celery CLI
+    # --beat runs the scheduler inside the same process
+    try:
+        subprocess.run(
+            [
+                "celery",
+                "-A", "services.worker.celery_app",
+                "worker",
+                "--beat",
+                "--loglevel=info"
+            ],
+            check=True
+        )
+    except KeyboardInterrupt:
+        logger.info("✅ Celery stopped via keyboard interrupt")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"❌ Celery exited with error: {e}")
         sys.exit(1)
 
 
