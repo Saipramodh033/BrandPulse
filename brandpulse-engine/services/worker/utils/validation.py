@@ -8,7 +8,7 @@ import logging
 from typing import Optional
 import re
 
-from services.shared.models import Company, Insight
+from services.shared.models import Company
 
 logger = logging.getLogger(__name__)
 
@@ -64,28 +64,7 @@ def is_valid_email(email: str) -> bool:
     return re.match(pattern, email) is not None
 
 
-def validate_insight_content(content: str) -> Optional[str]:
-    """
-    Validate generated insight content.
-    
-    Args:
-        content: Insight content (Markdown)
-        
-    Returns:
-        Error message if invalid, None if valid
-    """
-    if not content or not content.strip():
-        return "Insight content is empty"
-    
-    # Check minimum length (at least 100 characters for meaningful insight)
-    if len(content.strip()) < 100:
-        return f"Insight too short ({len(content)} chars, minimum: 100)"
-    
-    # Check for required Markdown structure (at least one heading)
-    if not any(marker in content for marker in ['#', '##', '###']):
-        return "Insight missing Markdown structure (no headings found)"
-    
-    return None
+
 
 
 def truncate_text(text: str, max_length: int, suffix: str = "...") -> str:

@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-from services.shared.models import Company, Insight
+from services.shared.models import Company, GeneratedIdea
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +28,11 @@ def calculate_next_run_time(current_time: datetime, frequency_hours: int) -> dat
         >>> calculate_next_run_time(datetime(2025, 1, 1, 10, 0), 24)
         datetime(2025, 1, 2, 10, 0)  # 24 hours later
     """
-    return current_time + timedelta(hours=frequency_hours)
+    freq = max(1.0, float(frequency_hours))
+    return current_time + timedelta(hours=freq)
 
 
-def is_insight_expired(insight: Insight, company: Company) -> bool:
+def is_insight_expired(insight: GeneratedIdea, company: Company) -> bool:
     """
     Check if pending insight exceeded company's frequency window.
     

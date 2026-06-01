@@ -14,7 +14,6 @@ from services.worker.utils.time import (
 from services.worker.utils.validation import (
     validate_company_for_processing,
     is_valid_email,
-    validate_insight_content,
     truncate_text,
     sanitize_filename
 )
@@ -31,7 +30,6 @@ __all__ = [
     # Validation
     'validate_company_for_processing',
     'is_valid_email',
-    'validate_insight_content',
     'truncate_text',
     'sanitize_filename'
 ]
