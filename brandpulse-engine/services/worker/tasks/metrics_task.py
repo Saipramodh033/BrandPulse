@@ -9,7 +9,7 @@ from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from services.shared.models import Metric, Insight, EmailLog, InsightStatusEnum, EmailTypeEnum
+from services.shared.models import Metric, GeneratedIdea, EmailLog, EmailTypeEnum
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +26,15 @@ def update_system_metrics(session: Session):
             session.add(metric)
         
         # Count insights by status
-        total_insights = session.query(Insight).count()
-        pending_count = session.query(Insight).filter(
-            Insight.status == InsightStatusEnum.PENDING
+        total_insights = session.query(GeneratedIdea).count()
+        pending_count = session.query(GeneratedIdea).filter(
+            GeneratedIdea.status == 'pending'
         ).count()
-        approved_count = session.query(Insight).filter(
-            Insight.status == InsightStatusEnum.APPROVED
+        approved_count = session.query(GeneratedIdea).filter(
+            GeneratedIdea.status == 'approved'
         ).count()
-        rejected_count = session.query(Insight).filter(
-            Insight.status == InsightStatusEnum.REJECTED
+        rejected_count = session.query(GeneratedIdea).filter(
+            GeneratedIdea.status == 'rejected'
         ).count()
         
         # Average processing time

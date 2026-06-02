@@ -13,7 +13,7 @@ import resend
 from jinja2 import Environment, FileSystemLoader
 import markdown
 
-from services.shared.models import Company, Insight, EmailTypeEnum
+from services.shared.models import Company, GeneratedIdea, EmailTypeEnum
 from services.worker.email_service.logger import log_email_delivery
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ def init_resend_client():
     resend.api_key = api_key
 
 
-def send_insight_email(insight: Insight, company: Company, session: Session) -> bool:
+def send_insight_email(insight: GeneratedIdea, company: Company, session: Session) -> bool:
     """
     Send approved insight to company email.
     
@@ -63,7 +63,7 @@ def send_insight_email(insight: Insight, company: Company, session: Session) -> 
         template = jinja_env.get_template('insight_email.html')
         html_content = template.render(
             company_name=company.name,
-            content_html=markdown_to_html(insight.content),
+            content_html=markdown_to_html(insight.full_content),
             insight_id=insight.id,
             generated_date=insight.created_at.strftime('%B %d, %Y')
         )

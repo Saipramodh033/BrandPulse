@@ -47,12 +47,24 @@ services:
       - brandpulse_network
 
   # ================================================================
+  # Redis (Celery Message Broker & Result Backend)
+  # ================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: brandpulse_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - brandpulse_network
+
+  # ================================================================
   # Worker Service (Autonomous Agent + Scheduler)
   # ================================================================
   worker:
     build:
       context: .
-      dockerfile: Dockerfile.worker
+      dockerfile: Dockerfile.backend
     
     container_name: brandpulse_worker
     restart: unless-stopped
@@ -60,10 +72,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy  # Wait for PostgreSQL to be ready
+      redis:
+        condition: service_started
     
     environment:
       # Database connection
       DATABASE_URL: ${DATABASE_URL}
+      
+      # Redis Connection for Celery
+      REDIS_URL: redis://redis:6379/0
       
       # Google AI API
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
@@ -102,60 +119,64 @@ services:
       - brandpulse_network
     
     # Keep container running (scheduler runs in background)
-    command: python services/worker/scheduler.py
+    command: ["python", "services/worker/scheduler.py"]
 
   # ================================================================
-  # Dashboard Service (Streamlit Admin UI)
+  # API Service (FastAPI — Phase 2.5+)
   # ================================================================
-  dashboard:
+  api:
     build:
       context: .
-      dockerfile: Dockerfile.dashboard
-    
-    container_name: brandpulse_dashboard
+      dockerfile: Dockerfile.backend
+    container_name: brandpulse_api
     restart: unless-stopped
-    
+    command: ["uvicorn", "services.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
     depends_on:
       postgres:
         condition: service_healthy
-    
+
     environment:
       # Database connection
       DATABASE_URL: ${DATABASE_URL}
-      
-      # Admin credentials
-      ADMIN_USERNAME: ${ADMIN_USERNAME}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-      
-      # Application config
-      MAX_PDF_SIZE_MB: ${MAX_PDF_SIZE_MB}
-      LOG_LEVEL: ${LOG_LEVEL}
-      
-      # Google AI (for embeddings when uploading PDFs)
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      
+
+      # Redis Connection for Celery and WebSockets
+      REDIS_URL: redis://redis:6379/0
+
+      # API key auth (A2 Fix: leave empty to disable auth in dev)
+      API_KEY: ${API_KEY:-}
+
       # Python environment
       PYTHONUNBUFFERED: 1
-    
+
     ports:
-      # Expose Streamlit to host machine
-      - "8501:8501"
-    
+      - "8000:8000"
+
     volumes:
-      # Mount code for development
-      - ./services:/app/services
-      
-      # Shared log directory
-      - ./logs:/app/logs
-      
-      # Templates (for preview in dashboard)
-      - ./templates:/app/templates
-    
+      # Mount code for development (hot reload)
+      - .:/app
+
     networks:
       - brandpulse_network
-    
-    # Streamlit startup command
-    command: streamlit run services/dashboard/app.py --server.port=8501 --server.address=0.0.0.0
+
+  # ================================================================
+  # Frontend Service (Next.js - Phase 7)
+  # ================================================================
+  frontend:
+    build:
+      context: ./services/frontend
+      dockerfile: Dockerfile
+    container_name: brandpulse_frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000/api}
+      - HOSTNAME=0.0.0.0
+    ports:
+      - "3000:3000"
+    networks:
+      - brandpulse_network
 
 # ==================================================================
 # Volumes (Persistent Storage)

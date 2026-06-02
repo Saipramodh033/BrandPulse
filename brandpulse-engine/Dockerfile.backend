@@ -1,7 +1,6 @@
 # ==================================================================
-# BrandPulse Worker Container
+# BrandPulse Backend Container (Shared by API & Worker)
 # ==================================================================
-# Contains: Autonomous agent + scheduler + background job processor
 # Python 3.11 for modern async support
 # ==================================================================
 
@@ -14,20 +13,17 @@ WORKDIR /app
 # Install System Dependencies
 # ==================================================================
 RUN apt-get update && apt-get install -y \
-    # PostgreSQL client tools (for psql debugging)
     postgresql-client \
-    # Build tools for Python packages with C extensions
+    libpq-dev \
     gcc \
     g++ \
-    # Networking tools for debugging
     curl \
-    # Clean up to reduce image size
     && rm -rf /var/lib/apt/lists/*
 
 # ==================================================================
 # Install Python Dependencies
 # ==================================================================
-# Copy requirements first (Docker layer caching - rebuilds only if requirements change)
+# Copy requirements first (Docker layer caching)
 COPY requirements.txt .
 
 # Install Python packages
@@ -37,11 +33,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # ==================================================================
 # Copy Application Code
 # ==================================================================
-# Copy entire services directory
-COPY services/ ./services/
-
-# Copy email templates
-COPY templates/ ./templates/
+COPY . .
 
 # Create logs directory
 RUN mkdir -p /app/logs
@@ -49,22 +41,11 @@ RUN mkdir -p /app/logs
 # ==================================================================
 # Environment Configuration
 # ==================================================================
-# Set Python path so imports work
 ENV PYTHONPATH=/app
-
-# Unbuffered Python output (see logs in real-time)
 ENV PYTHONUNBUFFERED=1
 
-# ==================================================================
-# Health Check
-# ==================================================================
-# Check if scheduler process is running
-HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import sys; sys.exit(0)"
+# Expose API port (ignored by worker)
+EXPOSE 8000
 
-# ==================================================================
-# Startup Command
-# ==================================================================
-# Run the scheduler (infinite loop, checks for jobs periodically)
-# Override this in docker-compose.yml if needed
-CMD ["python", "services/worker/scheduler.py"]
+# Default command (can be overridden in docker-compose.yml)
+CMD ["python", "-c", "print('Specify a command in docker-compose.yml')"]

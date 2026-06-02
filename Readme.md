@@ -1,424 +1,535 @@
-# 🚀 BrandPulse
+# BrandPulse
 
-**Autonomous AI Agent for Strategic Intelligence**
+> **Autonomous content strategy engine powered by a ReAct AI agent.**
 
-BrandPulse is a fully autonomous AI agent built with LangGraph that generates market intelligence insights without human intervention. The agent independently researches market trends, analyzes company contexts, generates strategic insights, and delivers them via email—all on a scheduled basis. Simply upload company profiles and let the agent do the work.
-
----
-
-## ✨ Features
-
-### 🎯 **Core Capabilities**
-- **Autonomous Insight Generation**: AI agent automatically generates strategic intelligence on schedule
-- **RAG-Powered Analysis**: Vector embeddings (pgvector) enable semantic understanding of company profiles
-- **Market Research**: Optional web search integration (Tavily) for real-time market trends
-- **Email Delivery**: Automated email delivery via Resend (100 emails/day free tier)
-- **Approval Workflow**: Admin review and approval before insights are sent to clients
-
-### 📊 **Professional Dashboard**
-- **Authentication**: Secure login with bcrypt password hashing
-- **Company Management**: CRUD operations with PDF profile upload
-- **Insights Review**: Approve, reject, or request refinements
-- **Analytics**: System metrics, KPIs, and performance tracking
-- **Settings**: Configurable LLM prompts for customization
-
-### 🤖 **AI Architecture**
-- **LangGraph Agent**: Multi-step reasoning with search, analysis, and generation nodes
-- **Google Gemini**: LLM for insight generation and embeddings
-- **Adaptive Scheduling**: Configurable frequency per company (minutes to days)
-- **Auto-Rejection**: Expired pending insights trigger apology emails
+BrandPulse continuously monitors market signals, generates platform-ready social media content ideas, and learns from human feedback — fully automated, end-to-end. Built for B2B marketing teams who want AI-generated content that is specific, grounded in real events, and actually sounds human.
 
 ---
 
-## 🏗️ Architecture
+## Table of Contents
+
+- [What It Does](#what-it-does)
+- [How It Works — The ReAct Agent](#how-it-works--the-react-agent)
+- [Architecture](#architecture)
+- [Project Structure](#project-structure)
+- [Database Models](#database-models)
+- [API Reference](#api-reference)
+- [Setup & Installation](#setup--installation)
+- [Environment Variables](#environment-variables)
+- [Usage Guide](#usage-guide)
+- [Live Run Tracing](#live-run-tracing)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
+- [Tech Stack](#tech-stack)
+- [API Limits (Free Tiers)](#api-limits-free-tiers)
+
+---
+
+## What It Does
+
+1. **Recalls memory** — checks what angles have already been used or rejected for this company
+2. **Profiles the company** — extracts industry space, audience, and brand voice from their document
+3. **Researches market news** — searches for specific, recent, verifiable signals using Tavily or DuckDuckGo
+4. **Evaluates signal quality** — retries with different queries if the signal is too generic (up to 3 attempts)
+5. **Chooses a fresh angle** — picks a content direction that hasn't been overused or rejected
+6. **Generates 4 ideas** — hook, body, CTA, platform, implication type — grounded in the signal
+7. **Self-validates** — critiques its own output against editorial quality criteria
+8. **Surfaces to inbox** — human reviewer sees ideas in real time as each step completes
+9. **Refines on demand** — admin feedback triggers an LLM rewrite of a specific idea
+
+Runs are scheduled automatically per company (configurable frequency in hours) via Celery Beat. Runs can also be triggered manually from the dashboard.
+
+---
+
+## How It Works — The ReAct Agent
+
+The core of BrandPulse is a **ReAct (Reason + Act) agent** — a pattern where the LLM autonomously decides which tools to call, in what order, and when the output is good enough to submit.
+
+This is not a hardcoded pipeline. The LLM reasons about signal quality, angle freshness, and idea quality at each step and makes its own decisions.
+
+### Agent Tools
+
+| Tool | What the LLM does with it |
+|---|---|
+| `recall_company_memory` | Reads past angles, rejected angles, recent hooks from DB. Always called first. |
+| `profile_company` | Extracts structured profile: industry space, target audience, brand voice. |
+| `search_web` | Searches for recent market news. Can be called multiple times with different queries. |
+| `extract_signal` | Evaluates search results: is this signal specific + recent + verifiable? |
+| `generate_ideas` | Generates 4 ideas grounded in the market signal and chosen angle. |
+| `validate_and_critique_ideas` | Quality-checks ideas against 4 editorial criteria before surfacing them. |
+| `finish` | Submits the final validated ideas and ends the agent loop. |
+
+### Agent Decision Loop
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    ReAct Agent Loop                     │
+│                                                         │
+│  recall_company_memory                                  │
+│         ↓                                               │
+│  profile_company                                        │
+│         ↓                                               │
+│  search_web ──────────────────────────────┐             │
+│         ↓                                 │ weak signal │
+│  extract_signal ─── strength="weak"? ─────┘ (max 3x)   │
+│         ↓ strength="strong" (or max retries hit)        │
+│         ↓ is_evergreen=True if max retries hit          │
+│  generate_ideas                                         │
+│         ↓                                               │
+│  validate_and_critique_ideas                            │
+│         ↓                                               │
+│   ≥3 passing? ──── Yes ──→ finish()                     │
+│         │                                               │
+│         └── No ──→ generate_ideas again (diff angle)    │
+└─────────────────────────────────────────────────────────┘
+```
+
+**What makes this genuinely agentic:**
+- The LLM decides *when* to search again and *what different query to use*
+- The LLM decides *whether* signal is strong enough to proceed
+- The LLM decides *which angle* to pick based on memory
+- The LLM decides *when* the output meets the quality bar
+
+### Content Angle Taxonomy
+
+The agent picks from 10 structured content angles, tracked per company to ensure freshness:
+
+```
+build-in-public        | user-perception      | hiring-and-culture
+contrarian-take        | industry-trend       | competitive-positioning
+data-driven-insight    | founder-story        | product-update
+customer-success
+```
+
+Rejected angles are never reused. Overused angles are deprioritised.
+
+### Evergreen Mode
+
+If the agent cannot find a strong, specific market signal after 3 search attempts, it automatically switches to **evergreen mode**: generates timeless, foundational content not dependent on current events. This ensures every scheduled run produces output.
+
+### HITL (Human-in-the-Loop) Refinement
+
+Reviewers can request a rewrite of any individual idea with written feedback. This triggers a dedicated Celery task that calls the LLM directly and returns the refined idea back to `pending` status for re-review.
+
+---
+
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     BrandPulse System                        │
-├─────────────────────────────────────────────────────────────┤
-│                                                               │
-│  ┌──────────────┐      ┌──────────────┐      ┌───────────┐ │
-│  │  Dashboard   │      │    Worker    │      │ PostgreSQL│ │
-│  │  (Streamlit) │◄────►│  (Scheduler) │◄────►│ +pgvector │ │
-│  │   Port 8501  │      │   Python     │      │  Port 5432│ │
-│  └──────────────┘      └──────────────┘      └───────────┘ │
-│         │                      │                             │
-│         │                      ├─► Google Gemini API         │
-│         │                      ├─► Tavily Search API         │
-│         │                      └─► Resend Email API          │
-│                                                               │
+│                       Docker Compose                        │
+│                                                             │
+│  ┌──────────────┐   ┌────────────────┐   ┌──────────────┐  │
+│  │  Frontend    │   │   API          │   │   Worker     │  │
+│  │  Next.js 14  │◄──│   FastAPI      │◄──│   Celery     │  │
+│  │  :3000       │   │   :8000        │   │   + Beat     │  │
+│  └──────┬───────┘   └──────┬─────────┘   └──────┬───────┘  │
+│         │                  │                     │          │
+│         │           WebSocket                    │          │
+│         │           (live trace)          ┌──────▼───────┐  │
+│         │                  │              │   Redis :6379│  │
+│         └──────────────────┤◄────pub/sub──│   (broker +  │  │
+│                            │              │    cache)    │  │
+│                     ┌──────▼───────┐      └──────────────┘  │
+│                     │  PostgreSQL  │                         │
+│                     │  :5432       │      External APIs:     │
+│                     │  + pgvector  │      • Google Gemini    │
+│                     └─────────────┘      • Tavily Search     │
+│                                          • DuckDuckGo (fbk)  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### **Components**
+### Services
 
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| **Dashboard** | Streamlit 1.x | Admin UI for company/insight management |
-| **Worker** | Python 3.11 + APScheduler | Autonomous agent with scheduled jobs |
-| **Database** | PostgreSQL 15 + pgvector | Structured data + vector embeddings |
-| **LLM** | Google Gemini (gemini-1.5-flash) | Text generation + embeddings |
-| **Search** | Tavily API (optional) | Real-time market intelligence |
-| **Email** | Resend | Transactional email delivery |
+| Service | Technology | Role |
+|---|---|---|
+| `frontend` | Next.js 14, TypeScript, Framer Motion | Idea inbox, company dashboard, live run trace panel |
+| `api` | FastAPI, Uvicorn | REST API + WebSocket pub/sub gateway |
+| `worker` | Celery 5 + Celery Beat | ReAct agent runner, scheduled task dispatcher |
+| `postgres` | PostgreSQL 15 + pgvector | Primary data store for companies, ideas, run logs |
+| `redis` | Redis 7 | Celery message broker + Redis pub/sub for live WebSocket traces |
 
 ---
 
-## 🚀 Quick Start
+## Project Structure
 
-### **Prerequisites**
-- Docker & Docker Compose
-- Google AI API key (free tier: 1500 requests/day)
-- Resend API key (free tier: 100 emails/day)
-- Tavily API key (optional, free tier: 1000 searches/month)
+```
+brandpulse-engine/
+├── docker-compose.yml
+├── Dockerfile.api
+├── Dockerfile.worker
+├── requirements.txt
+├── .env.example
+│
+└── services/
+    │
+    ├── shared/                         # Shared code across all services
+    │   ├── models.py                   # SQLAlchemy ORM: Company, GeneratedIdea, RunLog, CompanyProfile
+    │   ├── database.py                 # Session factory, connection pooling, health check
+    │   └── init_db.py                  # Schema bootstrap on startup
+    │
+    ├── worker/                         # Celery worker + ReAct agent
+    │   ├── celery_app.py               # Celery config, broker, Beat schedule
+    │   ├── scheduler.py                # Worker process entry point
+    │   │
+    │   ├── agent/                      # ReAct agent (core intelligence)
+    │   │   ├── core.py                 # run_ideation_v4() — agent loop
+    │   │   │                           # refine_generated_idea() — HITL rewrite
+    │   │   ├── tools.py                # @tool definitions (7 tools)
+    │   │   │                           # make_db_tools() — DB-aware tool factory
+    │   │   ├── prompts.py              # ReAct system prompt + legacy prompts
+    │   │   ├── schemas.py              # Pydantic structured output schemas
+    │   │   └── llm.py                  # Gemini LLM factory (get_llm, get_llm_structured)
+    │   │
+    │   ├── tasks/
+    │   │   ├── ideation_task.py        # Celery tasks: queue_generation_tasks,
+    │   │   │                           #   process_company_ideation, process_idea_refinement
+    │   │   └── generation_task.py      # Direct session generation helper
+    │   │
+    │   ├── email_service/              # Email delivery (Resend)
+    │   │   ├── sender.py
+    │   │   └── logger.py
+    │   │
+    │   └── utils/
+    │       ├── pdf.py                  # PDF text extraction
+    │       ├── time.py                 # next_run_time calculation
+    │       └── validation.py           # Input sanitisation
+    │
+    ├── api/                            # FastAPI backend
+    │   ├── main.py                     # App factory, CORS, Redis listener, startup
+    │   ├── dependencies.py             # DB session injection
+    │   └── routers/
+    │       ├── companies.py            # Company CRUD, run triggering, angle analytics
+    │       ├── ideas.py                # Idea approve, reject, refine
+    │       ├── websockets.py           # WebSocket manager + trace endpoint
+    │       └── dashboard.py            # Aggregate stats API
+    │
+    └── frontend/                       # Next.js 14 app
+        └── src/app/
+            ├── page.tsx                # Company dashboard (stats, activity feed)
+            └── companies/[id]/inbox/   # Idea inbox + live agent trace panel
+```
 
-### **1. Clone Repository**
+---
+
+## Database Models
+
+| Model | Key Fields | Purpose |
+|---|---|---|
+| `Company` | `name`, `description`, `pdf_text`, `frequency_hours`, `next_run_time`, `status` | Company registry. Controls scheduling. |
+| `CompanyProfile` | `space`, `audience`, `brand_voice`, `key_differentiators`, `region` | Cached LLM-extracted profile. Invalidated when company is updated. |
+| `GeneratedIdea` | `hook`, `body`, `cta`, `platform`, `implication_type`, `angle_category`, `angle_detail`, `signal_used`, `status` | Individual content idea. Status: `pending → approved / rejected / refine_requested`. |
+| `RunLog` | `company_id`, `trace_events`, `signal_strength`, `chosen_angle`, `evergreen`, `error` | Full trace of each agent run for debugging and analytics. |
+
+---
+
+## API Reference
+
+### Companies
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/companies/` | List all companies with stats |
+| `POST` | `/api/companies/` | Create a new company |
+| `GET` | `/api/companies/{id}` | Get company details |
+| `PATCH` | `/api/companies/{id}` | Update company settings |
+| `DELETE` | `/api/companies/{id}` | Delete company and all its data |
+| `POST` | `/api/companies/{id}/run` | **Manually trigger an ideation run** |
+| `GET` | `/api/companies/{id}/runs` | List run history with trace events |
+| `GET` | `/api/companies/{id}/ideas` | List ideas (filterable by status) |
+| `GET` | `/api/companies/{id}/angles` | Angle usage analytics |
+
+### Ideas
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/ideas/{id}` | Get a single idea |
+| `PATCH` | `/api/ideas/{id}/approve` | Approve an idea |
+| `PATCH` | `/api/ideas/{id}/reject` | Reject with optional feedback |
+| `POST` | `/api/ideas/{id}/refine` | Request LLM rewrite with feedback |
+
+### System
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/dashboard/stats` | Aggregate metrics (total ideas, win rate) |
+| `GET` | `/api/dashboard/activity` | Recent run activity feed |
+| `GET` | `/health` | API health check |
+| `WS` | `/api/ws/trace/{company_id}` | **Live agent trace WebSocket stream** |
+
+---
+
+## Setup & Installation
+
+### Prerequisites
+
+- Docker Desktop
+- A Google Gemini API key ([get one free](https://aistudio.google.com/app/apikey))
+- Optionally: a Tavily API key ([free tier](https://tavily.com) — 1,000 searches/month)
+
+### 1. Clone
+
 ```bash
-git clone <your-repo-url>
+git clone <repo-url>
 cd brandpulse-engine
 ```
 
-### **2. Configure Environment**
+### 2. Configure
+
 ```bash
-# Copy template
 cp .env.example .env
-
-# Edit .env and add your API keys
-nano .env
 ```
 
-**Required Variables:**
+Edit `.env` — minimum required:
+
 ```env
-# Database
-POSTGRES_DB=brandpulse
-POSTGRES_USER=brandpulse_user
-POSTGRES_PASSWORD=your_secure_password_here
-DATABASE_URL=postgresql://brandpulse_user:your_secure_password_here@postgres:5432/brandpulse
-
-# Google AI (Get from: https://makersuite.google.com/app/apikey)
 GOOGLE_API_KEY=AIzaSy...
-
-# Resend Email (Get from: https://resend.com/api-keys)
-RESEND_API_KEY=re_...
-RESEND_FROM_EMAIL=noreply@yourdomain.com
-SEND_EMAILS=false  # Set to 'true' when ready to send emails
-
-# Admin Login
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=change_me_in_production
-
-# Optional: Web Search (Get from: https://tavily.com)
-TAVILY_API_KEY=tvly-...
-ENABLE_WEB_SEARCH=true
+DATABASE_URL=postgresql://brandpulse:brandpulse@postgres:5432/brandpulse
+REDIS_URL=redis://redis:6379/0
+NEXT_PUBLIC_API_URL=http://localhost:8000/api
 ```
 
-### **3. Start Services**
-```bash
-# Build and start all containers
-docker-compose up --build -d
-
-# View logs
-docker-compose logs -f
-
-# Check status
-docker-compose ps
-```
-
-### **4. Initialize Database**
-```bash
-# Create tables and seed data
-docker exec brandpulse_dashboard python -c "from services.shared.models import create_tables; from services.shared.database import engine; create_tables(engine)"
-```
-
-### **5. Access Dashboard**
-Open browser to: **http://localhost:8501**
-
-**Default Login:**
-- Username: `admin`
-- Password: `admin123` (or your configured password)
-
----
-
-## 📖 Usage Guide
-
-### **Adding a Company**
-1. Navigate to **Companies** page
-2. Click **Add New Company**
-3. Fill in details:
-   - Company Name
-   - Description
-   - Email (for insight delivery)
-   - Frequency (hours between insights)
-4. Upload PDF profile (company background, services, etc.)
-5. Submit → System generates embeddings and schedules first run
-
-### **Reviewing Insights**
-1. Navigate to **Insights** page
-2. View pending insights in tabs (Pending/Approved/Rejected)
-3. Expand insight to read full content
-4. Actions:
-   - ✅ **Approve** → Sends email to company
-   - ❌ **Reject** → Provide feedback for refinement
-   - 🔄 **Refining** → Agent regenerates based on feedback
-
-### **Monitoring System**
-1. Navigate to **Analytics** page
-2. View metrics:
-   - Total insights generated
-   - Approval rate
-   - Average processing time
-   - Email delivery stats
-
-### **Customizing Prompts**
-1. Navigate to **Settings** page
-2. Edit **System Prompt** (agent behavior)
-3. Edit **User Template** (company analysis template)
-4. Save changes → Affects future insight generation
-
----
-
-## 🛠️ Development
-
-### **Project Structure**
-```
-brandpulse-engine/
-├── docker-compose.yml          # Service orchestration
-├── Dockerfile.worker           # Worker container
-├── Dockerfile.dashboard        # Dashboard container
-├── requirements.txt            # Python dependencies
-├── .env                        # Environment variables (not in Git)
-├── .env.example                # Environment template
-├── README.md                   # This file
-├── services/
-│   ├── __init__.py
-│   ├── shared/                 # Shared code
-│   │   ├── __init__.py
-│   │   ├── database.py         # SQLAlchemy setup
-│   │   ├── models.py           # Database models
-│   │   ├── models_config.py    # Configuration models (PromptConfig)
-│   │   └── init_db.py          # Database initialization
-│   ├── worker/                 # Autonomous agent
-│   │   ├── __init__.py
-│   │   ├── scheduler.py        # APScheduler entry point
-│   │   ├── tasks/              # Scheduled job definitions
-│   │   │   ├── __init__.py
-│   │   │   ├── generation_task.py    # Insight generation job
-│   │   │   ├── metrics_task.py       # System metrics update
-│   │   │   ├── refinement_task.py    # Rejected insight refinement
-│   │   │   └── rejection_task.py     # Auto-reject expired insights
-│   │   ├── agent/              # LangGraph agent
-│   │   │   ├── __init__.py
-│   │   │   ├── core.py         # Agent workflow & state management
-│   │   │   ├── nodes.py        # Agent nodes (search, analyze, generate)
-│   │   │   ├── llm.py          # LLM interface (Gemini)
-│   │   │   └── prompts.py      # System prompts
-│   │   ├── email_service/      # Email delivery
-│   │   │   ├── __init__.py
-│   │   │   ├── sender.py       # Resend integration
-│   │   │   └── logger.py       # Email tracking (EmailLog)
-│   │   └── utils/              # Worker utilities
-│   │       ├── __init__.py
-│   │       ├── pdf.py          # PDF text extraction (PyPDF2)
-│   │       ├── time.py         # Scheduling helpers
-│   │       └── validation.py   # Input validation
-│   └── dashboard/              # Streamlit UI
-│       ├── __init__.py
-│       ├── app.py              # Main entry point & router
-│       ├── pages/              # Dashboard pages
-│       │   ├── login.py        # Authentication page
-│       │   ├── companies.py    # Company CRUD
-│       │   ├── insights.py     # Insight review workflow
-│       │   ├── metrics.py      # Analytics dashboard
-│       │   └── settings.py     # LLM prompt configuration
-│       └── utils/              # Dashboard utilities
-│           ├── auth.py         # Login/logout logic
-│           └── session.py      # Session state management
-├── templates/                  # Jinja2 email templates
-│   ├── insight_email.html      # Approved insight email
-│   └── apology_email.html      # Auto-rejection apology
-└── logs/                       # Log files (mounted volume)
-    └── .gitkeep
-```
-
-### **Database Models**
-
-| Model | Description |
-|-------|-------------|
-| **Admin** | Dashboard user accounts (bcrypt hashed passwords) |
-| **Company** | Client registry with RAG embeddings (768-dim vectors) |
-| **Insight** | Generated strategic intelligence content |
-| **EmailLog** | Email delivery tracking (insights + apologies) |
-| **Metric** | Aggregated system performance metrics |
-| **PromptConfig** | LLM prompt configuration (system/user templates) |
-
-### **Agent Workflow (LangGraph)**
-```
-START → Search Node → Analyze Node → Generate Node → END
-  │         │              │              │
-  │    [Tavily/DDG]   [Company PDF]   [Gemini LLM]
-  │         │              │              │
-  └─────────┴──────────────┴──────────────┘
-              ↓
-         Insight Created
-              ↓
-         Admin Review
-              ↓
-    [Approve] → Email Sent
-    [Reject]  → Agent Refines
-```
-
-### **Scheduler Jobs**
-
-| Job | Frequency | Purpose |
-|-----|-----------|---------|
-| **Auto-Rejection** | Every run | Reject insights pending >24 hours, send apology |
-| **Refinement** | Every run | Re-process rejected insights with admin feedback |
-| **Generation** | Every run | Generate insights for companies due for processing |
-| **Metrics Update** | Every run | Aggregate system performance statistics |
-
----
-
-## ⚙️ Configuration
-
-### **Environment Variables**
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SCHEDULER_CHECK_INTERVAL` | 50 | Seconds between scheduler runs |
-| `MAX_PDF_SIZE_MB` | 10 | Maximum PDF upload size |
-| `SEND_EMAILS` | false | Enable/disable actual email sending |
-| `ENABLE_WEB_SEARCH` | true | Enable/disable Tavily search |
-| `LOG_LEVEL` | INFO | Logging verbosity (DEBUG/INFO/WARNING/ERROR) |
-
-### **Customization**
-
-**Agent Behavior:**
-- Edit `services/shared/models_config.py` → `PromptConfig` defaults
-- Or use Dashboard → Settings page
-
-**Email Templates:**
-- Edit `templates/insight_email.html` for approved insights
-- Edit `templates/apology_email.html` for auto-rejections
-
-**Scheduler Timing:**
-- Edit `SCHEDULER_CHECK_INTERVAL` in `.env`
-- Per-company frequency: Dashboard → Companies → Edit
-
----
-
-## 🔒 Security
-
-- ✅ **Password Hashing**: bcrypt for admin accounts
-- ✅ **Session Management**: Streamlit session state with authentication checks
-- ✅ **Input Validation**: File size limits, email validation
-- ✅ **API Key Protection**: Environment variables (not in code)
-- ✅ **Database Isolation**: PostgreSQL with user permissions
-- ⚠️ **Production Hardening**: Change default passwords, enable HTTPS, restrict ports
-
----
-
-## 📊 API Limits (Free Tiers)
-
-| Service | Free Tier | Rate Limit |
-|---------|-----------|------------|
-| **Google Gemini** | 1,500 requests/day | 15 RPM |
-| **Resend** | 3,000 emails/month | 100/day |
-| **Tavily** | 1,000 searches/month | 50/day |
-
----
-
-## 🐳 Docker Commands
+### 3. Start
 
 ```bash
-# Start services
-docker-compose up -d
+docker compose up --build
+```
 
-# Stop services
-docker-compose down
+This starts all 5 services. Database tables are created automatically on first startup.
 
-# View logs
-docker-compose logs -f [service_name]
+### 4. Access
 
-# Rebuild after code changes
-docker-compose up --build -d
+| Interface | URL |
+|---|---|
+| **Idea Inbox / Dashboard** | http://localhost:3000 |
+| **API Swagger Docs** | http://localhost:8000/docs |
+| **API Health** | http://localhost:8000/health |
 
-# Database console
-docker exec -it brandpulse_postgres psql -U brandpulse_user -d brandpulse
+---
 
-# Worker shell
-docker exec -it brandpulse_worker bash
+## Environment Variables
 
-# Dashboard shell
-docker exec -it brandpulse_dashboard bash
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `GOOGLE_API_KEY` | ✅ | — | Gemini API key for all LLM calls |
+| `DATABASE_URL` | ✅ | — | PostgreSQL connection string |
+| `REDIS_URL` | ✅ | — | Redis connection string |
+| `NEXT_PUBLIC_API_URL` | ✅ | — | API base URL visible to the browser |
+| `TAVILY_API_KEY` | ⬜ | — | Web search key. DuckDuckGo used automatically if absent |
+| `ENABLE_WEB_SEARCH` | ⬜ | `true` | Set `false` to disable web search entirely (uses evergreen mode always) |
+| `API_KEY` | ⬜ | — | API key for auth middleware. Leave empty to disable in dev |
+| `SEND_EMAILS` | ⬜ | `false` | Enable Resend email delivery |
+| `RESEND_API_KEY` | ⬜ | — | Resend.com key |
+| `RESEND_FROM_EMAIL` | ⬜ | — | Sender email address |
+| `LOG_LEVEL` | ⬜ | `INFO` | Logging verbosity: `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `MAX_PDF_SIZE_MB` | ⬜ | `10` | Maximum PDF upload size |
+
+---
+
+## Usage Guide
+
+### Adding a Company
+
+1. Open **http://localhost:3000**
+2. Click **+ Add Company**
+3. Fill in:
+   - **Name** — the company name
+   - **Description** — what they do (used as LLM context if no PDF)
+   - **Run Frequency** — hours between automated runs (e.g. `24` = daily)
+   - **PDF Upload** (optional) — company brochure, website content, pitch deck
+4. Submit — the first run is scheduled immediately
+
+### Reviewing Ideas
+
+Navigate to a company's **Inbox**. Ideas arrive in real time as the agent produces them.
+
+| Action | What happens |
+|---|---|
+| ✅ **Approve** | Marks idea as ready. Angle is logged as approved for memory. |
+| ❌ **Reject** | Discards idea. Angle is logged as rejected — agent avoids it in future runs. |
+| 🔄 **Refine** | Write specific feedback. A Celery task calls the LLM to rewrite the idea and returns it to `pending` for re-review. |
+
+### Triggering a Run Manually
+
+From the dashboard, click **▶ Trigger Run** on any company. The inbox immediately shows a live trace panel with each agent tool call as it fires.
+
+### Monitoring
+
+The dashboard shows:
+- Total ideas generated across all companies
+- Approval rate (win rate %)
+- Recent run activity feed with per-company run status
+
+---
+
+## Live Run Tracing
+
+Every agent tool call is published to a Redis pub/sub channel (`trace:{company_id}`). The API subscribes and forwards events over WebSocket to the frontend.
+
+The **inbox live panel** shows step-by-step progress in real time:
+
+```
+● Recalling past angles          ✓
+● Profiling company              ✓
+● Searching market news          ✓
+● Extracting signal              ✓ (strength: strong)
+● Generating ideas               ✓ (↻ currently running)
+● Validating ideas               ...
+```
+
+The panel appears immediately on run trigger — starting from "Waiting in queue…" before the worker even picks it up, then updating as each tool call completes.
+
+---
+
+## Development
+
+### Rebuilding after code changes
+
+```bash
+# Restart a single service
+docker compose restart worker
+
+# Rebuild and restart
+docker compose up --build worker
+```
+
+### Checking logs
+
+```bash
+# All services
+docker compose logs -f
+
+# Specific service
+docker compose logs -f worker
+docker compose logs -f api
+```
+
+### Database shell
+
+```bash
+docker exec -it brandpulse_postgres psql -U brandpulse -d brandpulse
+```
+
+### Useful queries
+
+```sql
+-- Check company run schedule
+SELECT name, next_run_time, status FROM companies;
+
+-- See recent ideas for a company
+SELECT hook, status, angle_category, created_at 
+FROM generated_ideas 
+WHERE company_id = 1 
+ORDER BY created_at DESC 
+LIMIT 10;
+
+-- See run trace for last run
+SELECT trace_events, signal_strength, evergreen, error 
+FROM run_logs 
+ORDER BY started_at DESC 
+LIMIT 1;
+```
+
+### Customising the Agent
+
+**Change the system prompt** (how the agent reasons):
+- Edit `services/worker/agent/prompts.py` → `get_react_system_prompt()`
+
+**Add or modify a tool**:
+- Edit `services/worker/agent/tools.py`
+- Add the new tool to `all_tools` list in `services/worker/agent/core.py`
+- Rebuild the worker: `docker compose up --build worker`
+
+**Change the content angle taxonomy**:
+- Edit `ANGLE_CATEGORIES` list in `services/worker/agent/tools.py`
+
+**Adjust max agent iterations** (default: 20 tool calls per run):
+- Edit `MAX_ITERATIONS` in `services/worker/agent/core.py`
+
+---
+
+## Troubleshooting
+
+### Worker not generating ideas?
+
+```bash
+# Check worker logs
+docker compose logs -f worker
+
+# Verify the company is due for a run
+docker exec brandpulse_postgres psql -U brandpulse -d brandpulse \
+  -c "SELECT name, next_run_time, status FROM companies;"
+
+# Reset next_run_time to trigger immediately
+docker exec brandpulse_postgres psql -U brandpulse -d brandpulse \
+  -c "UPDATE companies SET next_run_time = NOW() WHERE name = 'YourCompany';"
+```
+
+### API not starting?
+
+```bash
+docker compose logs api
+# Most common cause: DATABASE_URL or GOOGLE_API_KEY not set in .env
+```
+
+### Frontend can't reach API?
+
+Check that `NEXT_PUBLIC_API_URL` in `.env` matches where the API is actually running (`http://localhost:8000/api` for local dev).
+
+### Agent produces no ideas after a run?
+
+Check the RunLog in the database:
+
+```sql
+SELECT error, signal_strength, evergreen, trace_events 
+FROM run_logs 
+ORDER BY started_at DESC 
+LIMIT 1;
+```
+
+Common causes:
+- LLM quota exceeded (`GOOGLE_API_KEY` rate limit)
+- Web search returning empty results (check Tavily key or DuckDuckGo rate limits)
+- `validate_and_critique_ideas` rejecting all ideas — lower quality bar or check prompts
+
+### Live trace panel not updating?
+
+Check Redis is running and the WebSocket connection is established:
+
+```bash
+docker compose ps redis
+docker compose logs api | grep -i websocket
 ```
 
 ---
 
-## 🧪 Testing
+## Tech Stack
 
-```bash
-# Run worker scheduler manually
-docker exec brandpulse_worker python services/worker/scheduler.py
-
-# Test email sending (dev mode)
-docker exec brandpulse_worker python -c "
-from services.worker.email_service.sender import send_insight_email
-# ... test code
-"
-
-# Check database
-docker exec brandpulse_postgres psql -U brandpulse_user -d brandpulse -c "SELECT * FROM companies;"
-```
-
----
-
-## 🔧 Troubleshooting
-
-### **Dashboard not loading?**
-```bash
-# Check logs
-docker logs brandpulse_dashboard --tail 50
-
-# Restart dashboard
-docker-compose restart dashboard
-```
-
-### **Worker not generating insights?**
-```bash
-# Check logs
-docker logs brandpulse_worker --tail 50
-
-# Verify company next_run_time
-docker exec brandpulse_postgres psql -U brandpulse_user -d brandpulse -c \
-  "SELECT name, next_run_time, status FROM companies;"
-```
-
-### **Database connection errors?**
-```bash
-# Check PostgreSQL health
-docker-compose ps postgres
-
-# Verify DATABASE_URL in .env matches PostgreSQL credentials
-```
-
-### **Emails not sending?**
-1. Check `SEND_EMAILS=true` in `.env`
-2. Verify `RESEND_API_KEY` is valid
-3. Check logs: `docker logs brandpulse_worker | grep -i email`
-
+| Layer | Technology | Version |
+|---|---|---|
+| **LLM** | Google Gemini (via `langchain-google-genai`) | 2.0.8 |
+| **Agent Pattern** | LangChain tool-calling (ReAct) | 0.3.13 |
+| **Web Search** | Tavily (DuckDuckGo fallback) | 0.3.3 |
+| **Task Queue** | Celery + Celery Beat | 5.4.0 |
+| **Message Broker** | Redis | 5.1.1 client |
+| **API** | FastAPI + WebSockets | 0.115.0 |
+| **Frontend** | Next.js 14, TypeScript | 14.x |
+| **Database** | PostgreSQL 15 + pgvector | — |
+| **ORM** | SQLAlchemy 2 + Alembic | 2.0.36 |
+| **PDF Parsing** | PyPDF2 / pypdf | — |
+| **Email** | Resend | 0.8.0 |
+| **Container** | Docker Compose | — |
 
 ---
 
-## 🎉 Acknowledgments
+## API Limits (Free Tiers)
 
-Built with:
-- [Streamlit](https://streamlit.io/) - Dashboard framework
-- [LangGraph](https://github.com/langchain-ai/langgraph) - Agent orchestration
-- [Google Gemini](https://ai.google.dev/) - LLM and embeddings
-- [Resend](https://resend.com/) - Email delivery
-- [Tavily](https://tavily.com/) - Web search API
-- [pgvector](https://github.com/pgvector/pgvector) - Vector similarity search
+| Service | Free Tier | Notes |
+|---|---|---|
+| **Google Gemini** | 1,500 requests/day, 15 RPM | Each agent run makes ~5–10 LLM calls |
+| **Tavily** | 1,000 searches/month | Falls back to DuckDuckGo if key absent or quota hit |
+| **Resend** | 3,000 emails/month | Email delivery is off by default (`SEND_EMAILS=false`) |
 
 ---
 
-**Last Updated**: December 2025
-**Version**: 1.0.0
+*Last updated: June 2026*

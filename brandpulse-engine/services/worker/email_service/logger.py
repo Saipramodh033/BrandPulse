@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy.orm import Session
 
-from services.shared.models import Company, Insight, EmailLog, EmailTypeEnum
+from services.shared.models import Company, GeneratedIdea, EmailLog, EmailTypeEnum
 
 
 def log_email_delivery(
@@ -17,7 +17,7 @@ def log_email_delivery(
     email_type: EmailTypeEnum,
     subject: str,
     success: bool,
-    insight: Optional[Insight] = None,
+    insight: Optional[GeneratedIdea] = None,
     message_id: Optional[str] = None,
     error_message: Optional[str] = None
 ):

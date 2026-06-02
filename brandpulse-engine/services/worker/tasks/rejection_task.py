@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from services.shared.models import Insight, InsightStatusEnum
+from services.shared.models import GeneratedIdea
 from services.worker.email_service.sender import send_apology_email  # ← UPDATED IMPORT
 from services.worker.utils.time import is_insight_expired
 
@@ -25,8 +25,8 @@ def auto_reject_expired_insights(session: Session) -> int:
     logger.info("🔍 Checking for expired pending insights...")
     
     try:
-        pending_insights = session.query(Insight).filter(
-            Insight.status == InsightStatusEnum.PENDING
+        pending_insights = session.query(GeneratedIdea).filter(
+            GeneratedIdea.status == 'pending'
         ).all()
         
         rejected_count = 0
@@ -40,7 +40,7 @@ def auto_reject_expired_insights(session: Session) -> int:
                 )
                 
                 # Update insight
-                insight.status = InsightStatusEnum.REJECTED
+                insight.status = 'rejected'
                 insight.admin_feedback = (
                     f"AUTO-REJECTED: Review not completed within "
                     f"{company.frequency_hours}h window (created {insight.created_at})"

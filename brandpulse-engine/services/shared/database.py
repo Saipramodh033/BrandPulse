@@ -8,7 +8,8 @@ import os
 import logging
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy.pool import NullPool
+
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,10 @@ DATABASE_URL = os.getenv(
 # Create engine
 engine = create_engine(
     DATABASE_URL,
-    poolclass=NullPool,  # Disable connection pooling for simplicity
+    pool_size=5,          # D1 Fix: Use connection pool instead of NullPool
+    max_overflow=10,      # Allow up to 15 total connections under load
+    pool_timeout=30,      # Wait up to 30s for a connection from pool
+    pool_recycle=1800,    # Recycle connections every 30min to avoid stale connections
     echo=False,  # Set to True for SQL query logging
     future=True
 )
@@ -48,6 +52,19 @@ def get_db():
             # Use session
         finally:
             session.close()
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@contextmanager
+def get_db_session():
+    """
+    Context manager for getting a database session.
+    Used in Celery worker tasks.
     """
     db = SessionLocal()
     try:
@@ -92,6 +109,16 @@ def init_database():
     try:
         Base.metadata.create_all(bind=engine)
         logger.info("✅ Database tables initialized")
+        
+        # Self-healing migration for missing region column in company_profiles
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE company_profiles ADD COLUMN IF NOT EXISTS region VARCHAR(100) DEFAULT 'India';"))
+                conn.commit()
+            logger.info("✅ Database schema migrations applied (added region column to company_profiles if missing)")
+        except Exception as migration_error:
+            logger.warning(f"⚠️ Self-healing schema migration warning: {migration_error}")
+            
     except Exception as e:
         logger.error(f"❌ Failed to initialize database: {e}")
         raise
