@@ -4,44 +4,81 @@
 
 BrandPulse continuously monitors market signals, generates platform-ready social media content ideas, and learns from human feedback — fully automated, end-to-end. Built for B2B marketing teams who want AI-generated content that is specific, grounded in real events, and actually sounds human.
 
+**🚀 Business Impact: 95% Faster than Manual AI Prompting**  
+Even with tools like ChatGPT, marketers spend 20–30 minutes manually searching for industry news, feeding context into the prompt, and requesting rewrites. BrandPulse replaces this entire manual research workflow with an autonomous agent, cutting a 30-minute task down to a 45-second background job.
+
 ---
 
 ## Table of Contents
 
+- [Key Engineering Highlights](#key-engineering-highlights)
+- [Screenshots](#screenshots)
+- [Agent Architecture](#agent-architecture)
+- [System Architecture](#system-architecture)
+- [Tech Stack](#tech-stack)
 - [What It Does](#what-it-does)
-- [How It Works — The ReAct Agent](#how-it-works--the-react-agent)
-- [Architecture](#architecture)
-- [Project Structure](#project-structure)
-- [Database Models](#database-models)
-- [API Reference](#api-reference)
 - [Setup & Installation](#setup--installation)
 - [Environment Variables](#environment-variables)
 - [Usage Guide](#usage-guide)
 - [Live Run Tracing](#live-run-tracing)
+- [Project Structure](#project-structure)
+- [Database Models](#database-models)
+- [API Reference](#api-reference)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
-- [Tech Stack](#tech-stack)
 - [API Limits (Free Tiers)](#api-limits-free-tiers)
 
 ---
 
-## What It Does
+## Key Engineering Highlights
 
-1. **Recalls memory** — checks what angles have already been used or rejected for this company
-2. **Profiles the company** — extracts industry space, audience, and brand voice from their document
-3. **Researches market news** — searches for specific, recent, verifiable signals using Tavily or DuckDuckGo
-4. **Evaluates signal quality** — retries with different queries if the signal is too generic (up to 3 attempts)
-5. **Chooses a fresh angle** — picks a content direction that hasn't been overused or rejected
-6. **Generates 4 ideas** — hook, body, CTA, platform, implication type — grounded in the signal
-7. **Self-validates** — critiques its own output against editorial quality criteria
-8. **Surfaces to inbox** — human reviewer sees ideas in real time as each step completes
-9. **Refines on demand** — admin feedback triggers an LLM rewrite of a specific idea
-
-Runs are scheduled automatically per company (configurable frequency in hours) via Celery Beat. Runs can also be triggered manually from the dashboard.
+- **Custom ReAct Agent Pattern**: Built a fully autonomous AI agent from scratch that reasons, uses 5 distinct tools, evaluates its own signal quality, and implements retry/fallback logic.
+- **Event-Driven Microservices**: Decoupled the API (FastAPI) from the heavy LLM background processing (Celery/Redis), ensuring non-blocking frontend performance.
+- **Real-Time Distributed Tracing**: Implemented a Redis Pub/Sub to WebSocket pipeline to stream live agent thought processes (trace events) directly to the Next.js frontend in real-time.
+- **Production-Ready Data Layer**: Utilised PostgreSQL with pgvector for semantic memory, SQLAlchemy ORM for robust data modeling, and strict Pydantic schemas for LLM outputs to prevent hallucination errors.
 
 ---
 
-## How It Works — The ReAct Agent
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <b>1. Idea Inbox</b><br/>
+      Review ideas in real time.<br/><br/>
+      <img src="docs/screenshots/01_inbox_review.png" width="100%">
+    </td>
+    <td width="50%" valign="top">
+      <b>2. Content Library</b><br/>
+      All approved ideas centrally.<br/><br/>
+      <img src="docs/screenshots/03_content_library.png" width="100%">
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <b>3. Live Agent Trace</b><br/>
+      Watch tool calls stream live.<br/><br/>
+      <img src="docs/screenshots/04_worker_logs.png" width="100%">
+    </td>
+    <td width="50%" valign="top">
+      <b>4. HITL Refinement</b><br/>
+      Rewrite with specific feedback.<br/><br/>
+      <img src="docs/screenshots/02_inbox_refine.png" width="100%">
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <b>5. Settings</b><br/>
+      Configure automated schedule.<br/><br/>
+      <img src="docs/screenshots/05_settings.png" width="100%">
+    </td>
+    <td width="50%"></td>
+  </tr>
+</table>
+
+---
+
+## Agent Architecture
 
 The core of BrandPulse is a **ReAct (Reason + Act) agent** — a pattern where the LLM autonomously decides which tools to call, in what order, and when the output is good enough to submit.
 
@@ -59,30 +96,34 @@ This is not a hardcoded pipeline. The LLM reasons about signal quality, angle fr
 | `validate_and_critique_ideas` | Quality-checks ideas against 4 editorial criteria before surfacing them. |
 | `finish` | Submits the final validated ideas and ends the agent loop. |
 
-### Agent Decision Loop
+### Decision Loop
 
+```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 100, "rankSpacing": 80}}}%%
+flowchart LR
+    Trigger([Trigger]) --> T1
+    T1["① recall_company_memory\nprofile_company"] --> T2
+    T2["② search_web · extract_signal"] --> D1{Signal\nstrong?}
+    D1 -->|yes| T3["③ generate_ideas"]
+    D1 -->|no · retry| T2
+    T3 --> T4
+
+    subgraph tail[" "]
+        direction TB
+        T4["④ validate_and_critique_ideas"] --> D2{3+ ideas\npass?}
+        D2 -->|yes| T5(["⑤ finish"])
+    end
+
+    D2 -->|no · regenerate| T3
+    T1 <-->|read / write| DB[(PostgreSQL)]
+    T2 -->|search| Web[/Tavily · DuckDuckGo/]
+    T5 -->|save + surface| Inbox([Idea Inbox])
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    ReAct Agent Loop                     │
-│                                                         │
-│  recall_company_memory                                  │
-│         ↓                                               │
-│  profile_company                                        │
-│         ↓                                               │
-│  search_web ──────────────────────────────┐             │
-│         ↓                                 │ weak signal │
-│  extract_signal ─── strength="weak"? ─────┘ (max 3x)   │
-│         ↓ strength="strong" (or max retries hit)        │
-│         ↓ is_evergreen=True if max retries hit          │
-│  generate_ideas                                         │
-│         ↓                                               │
-│  validate_and_critique_ideas                            │
-│         ↓                                               │
-│   ≥3 passing? ──── Yes ──→ finish()                     │
-│         │                                               │
-│         └── No ──→ generate_ideas again (diff angle)    │
-└─────────────────────────────────────────────────────────┘
-```
+
+
+
+> Gemini Flash LLM reasons between every step — choosing which tool to call next based on the observation returned.
+
 
 **What makes this genuinely agentic:**
 - The LLM decides *when* to search again and *what different query to use*
@@ -113,30 +154,24 @@ Reviewers can request a rewrite of any individual idea with written feedback. Th
 
 ---
 
-## Architecture
+## System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       Docker Compose                        │
-│                                                             │
-│  ┌──────────────┐   ┌────────────────┐   ┌──────────────┐  │
-│  │  Frontend    │   │   API          │   │   Worker     │  │
-│  │  Next.js 14  │◄──│   FastAPI      │◄──│   Celery     │  │
-│  │  :3000       │   │   :8000        │   │   + Beat     │  │
-│  └──────┬───────┘   └──────┬─────────┘   └──────┬───────┘  │
-│         │                  │                     │          │
-│         │           WebSocket                    │          │
-│         │           (live trace)          ┌──────▼───────┐  │
-│         │                  │              │   Redis :6379│  │
-│         └──────────────────┤◄────pub/sub──│   (broker +  │  │
-│                            │              │    cache)    │  │
-│                     ┌──────▼───────┐      └──────────────┘  │
-│                     │  PostgreSQL  │                         │
-│                     │  :5432       │      External APIs:     │
-│                     │  + pgvector  │      • Google Gemini    │
-│                     └─────────────┘      • Tavily Search     │
-│                                          • DuckDuckGo (fbk)  │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph LR
+    Browser([Browser]) --> FE[Next.js 14\n:3000]
+    FE -->|REST| API[FastAPI\n:8000]
+    FE -->|WebSocket| API
+    API -->|read / write| DB[(PostgreSQL\n:5432)]
+    API -->|subscribe| Redis[(Redis\n:6379)]
+
+    subgraph Worker["Celery Worker + Beat Scheduler"]
+        Agent["ReAct Agent\nGemini Flash LLM"]
+    end
+
+    Agent -->|publish trace| Redis
+    Agent -->|read / write| DB
+    Agent -->|LLM calls| Gemini[Google Gemini]
+    Agent -->|web search| Search[Tavily\nDuckDuckGo]
 ```
 
 ### Services
@@ -151,111 +186,38 @@ Reviewers can request a rewrite of any individual idea with written feedback. Th
 
 ---
 
-## Project Structure
+## Tech Stack
 
-```
-brandpulse-engine/
-├── docker-compose.yml
-├── Dockerfile.api
-├── Dockerfile.worker
-├── requirements.txt
-├── .env.example
-│
-└── services/
-    │
-    ├── shared/                         # Shared code across all services
-    │   ├── models.py                   # SQLAlchemy ORM: Company, GeneratedIdea, RunLog, CompanyProfile
-    │   ├── database.py                 # Session factory, connection pooling, health check
-    │   └── init_db.py                  # Schema bootstrap on startup
-    │
-    ├── worker/                         # Celery worker + ReAct agent
-    │   ├── celery_app.py               # Celery config, broker, Beat schedule
-    │   ├── scheduler.py                # Worker process entry point
-    │   │
-    │   ├── agent/                      # ReAct agent (core intelligence)
-    │   │   ├── core.py                 # run_ideation_v4() — agent loop
-    │   │   │                           # refine_generated_idea() — HITL rewrite
-    │   │   ├── tools.py                # @tool definitions (7 tools)
-    │   │   │                           # make_db_tools() — DB-aware tool factory
-    │   │   ├── prompts.py              # ReAct system prompt + legacy prompts
-    │   │   ├── schemas.py              # Pydantic structured output schemas
-    │   │   └── llm.py                  # Gemini LLM factory (get_llm, get_llm_structured)
-    │   │
-    │   ├── tasks/
-    │   │   ├── ideation_task.py        # Celery tasks: queue_generation_tasks,
-    │   │   │                           #   process_company_ideation, process_idea_refinement
-    │   │   └── generation_task.py      # Direct session generation helper
-    │   │
-    │   ├── email_service/              # Email delivery (Resend)
-    │   │   ├── sender.py
-    │   │   └── logger.py
-    │   │
-    │   └── utils/
-    │       ├── pdf.py                  # PDF text extraction
-    │       ├── time.py                 # next_run_time calculation
-    │       └── validation.py           # Input sanitisation
-    │
-    ├── api/                            # FastAPI backend
-    │   ├── main.py                     # App factory, CORS, Redis listener, startup
-    │   ├── dependencies.py             # DB session injection
-    │   └── routers/
-    │       ├── companies.py            # Company CRUD, run triggering, angle analytics
-    │       ├── ideas.py                # Idea approve, reject, refine
-    │       ├── websockets.py           # WebSocket manager + trace endpoint
-    │       └── dashboard.py            # Aggregate stats API
-    │
-    └── frontend/                       # Next.js 14 app
-        └── src/app/
-            ├── page.tsx                # Company dashboard (stats, activity feed)
-            └── companies/[id]/inbox/   # Idea inbox + live agent trace panel
-```
+| Layer | Technology | Version |
+|---|---|---|
+| **LLM** | Google Gemini (via `langchain-google-genai`) | 2.0.8 |
+| **Agent Pattern** | LangChain tool-calling (ReAct) | 0.3.13 |
+| **Web Search** | Tavily (DuckDuckGo fallback) | 0.3.3 |
+| **Task Queue** | Celery + Celery Beat | 5.4.0 |
+| **Message Broker** | Redis | 5.1.1 client |
+| **API** | FastAPI + WebSockets | 0.115.0 |
+| **Frontend** | Next.js 14, TypeScript | 14.x |
+| **Database** | PostgreSQL 15 + pgvector | — |
+| **ORM** | SQLAlchemy 2 + Alembic | 2.0.36 |
+| **PDF Parsing** | PyPDF2 / pypdf | — |
+| **Email** | Resend | 0.8.0 |
+| **Container** | Docker Compose | — |
 
 ---
 
-## Database Models
+## What It Does
 
-| Model | Key Fields | Purpose |
-|---|---|---|
-| `Company` | `name`, `description`, `pdf_text`, `frequency_hours`, `next_run_time`, `status` | Company registry. Controls scheduling. |
-| `CompanyProfile` | `space`, `audience`, `brand_voice`, `key_differentiators`, `region` | Cached LLM-extracted profile. Invalidated when company is updated. |
-| `GeneratedIdea` | `hook`, `body`, `cta`, `platform`, `implication_type`, `angle_category`, `angle_detail`, `signal_used`, `status` | Individual content idea. Status: `pending → approved / rejected / refine_requested`. |
-| `RunLog` | `company_id`, `trace_events`, `signal_strength`, `chosen_angle`, `evergreen`, `error` | Full trace of each agent run for debugging and analytics. |
+1. **Recalls memory** — checks what angles have already been used or rejected for this company
+2. **Profiles the company** — extracts industry space, audience, and brand voice from their document
+3. **Researches market news** — searches for specific, recent, verifiable signals using Tavily or DuckDuckGo
+4. **Evaluates signal quality** — retries with different queries if the signal is too generic (up to 3 attempts)
+5. **Chooses a fresh angle** — picks a content direction that hasn't been overused or rejected
+6. **Generates 4 ideas** — hook, body, CTA, platform, implication type — grounded in the signal
+7. **Self-validates** — critiques its own output against editorial quality criteria
+8. **Surfaces to inbox** — human reviewer sees ideas in real time as each step completes
+9. **Refines on demand** — admin feedback triggers an LLM rewrite of a specific idea
 
----
-
-## API Reference
-
-### Companies
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/companies/` | List all companies with stats |
-| `POST` | `/api/companies/` | Create a new company |
-| `GET` | `/api/companies/{id}` | Get company details |
-| `PATCH` | `/api/companies/{id}` | Update company settings |
-| `DELETE` | `/api/companies/{id}` | Delete company and all its data |
-| `POST` | `/api/companies/{id}/run` | **Manually trigger an ideation run** |
-| `GET` | `/api/companies/{id}/runs` | List run history with trace events |
-| `GET` | `/api/companies/{id}/ideas` | List ideas (filterable by status) |
-| `GET` | `/api/companies/{id}/angles` | Angle usage analytics |
-
-### Ideas
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/ideas/{id}` | Get a single idea |
-| `PATCH` | `/api/ideas/{id}/approve` | Approve an idea |
-| `PATCH` | `/api/ideas/{id}/reject` | Reject with optional feedback |
-| `POST` | `/api/ideas/{id}/refine` | Request LLM rewrite with feedback |
-
-### System
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/dashboard/stats` | Aggregate metrics (total ideas, win rate) |
-| `GET` | `/api/dashboard/activity` | Recent run activity feed |
-| `GET` | `/health` | API health check |
-| `WS` | `/api/ws/trace/{company_id}` | **Live agent trace WebSocket stream** |
+Runs are scheduled automatically per company (configurable frequency in hours) via Celery Beat. Runs can also be triggered manually from the dashboard.
 
 ---
 
@@ -381,6 +343,114 @@ The panel appears immediately on run trigger — starting from "Waiting in queue
 
 ---
 
+## Project Structure
+
+```
+brandpulse-engine/
+├── docker-compose.yml
+├── Dockerfile.api
+├── Dockerfile.worker
+├── requirements.txt
+├── .env.example
+│
+└── services/
+    │
+    ├── shared/                         # Shared code across all services
+    │   ├── models.py                   # SQLAlchemy ORM: Company, GeneratedIdea, RunLog, CompanyProfile
+    │   ├── database.py                 # Session factory, connection pooling, health check
+    │   └── init_db.py                  # Schema bootstrap on startup
+    │
+    ├── worker/                         # Celery worker + ReAct agent
+    │   ├── celery_app.py               # Celery config, broker, Beat schedule
+    │   ├── scheduler.py                # Worker process entry point
+    │   │
+    │   ├── agent/                      # ReAct agent (core intelligence)
+    │   │   ├── core.py                 # run_ideation_v4() — agent loop
+    │   │   │                           # refine_generated_idea() — HITL rewrite
+    │   │   ├── tools.py                # @tool definitions (7 tools)
+    │   │   │                           # make_db_tools() — DB-aware tool factory
+    │   │   ├── prompts.py              # ReAct system prompt + legacy prompts
+    │   │   ├── schemas.py              # Pydantic structured output schemas
+    │   │   └── llm.py                  # Gemini LLM factory (get_llm, get_llm_structured)
+    │   │
+    │   ├── tasks/
+    │   │   ├── ideation_task.py        # Celery tasks: queue_generation_tasks,
+    │   │   │                           #   process_company_ideation, process_idea_refinement
+    │   │   └── generation_task.py      # Direct session generation helper
+    │   │
+    │   ├── email_service/              # Email delivery (Resend)
+    │   │   ├── sender.py
+    │   │   └── logger.py
+    │   │
+    │   └── utils/
+    │       ├── pdf.py                  # PDF text extraction
+    │       ├── time.py                 # next_run_time calculation
+    │       └── validation.py           # Input sanitisation
+    │
+    ├── api/                            # FastAPI backend
+    │   ├── main.py                     # App factory, CORS, Redis listener, startup
+    │   ├── dependencies.py             # DB session injection
+    │   └── routers/
+    │       ├── companies.py            # Company CRUD, run triggering, angle analytics
+    │       ├── ideas.py                # Idea approve, reject, refine
+    │       ├── websockets.py           # WebSocket manager + trace endpoint
+    │       └── dashboard.py            # Aggregate stats API
+    │
+    └── frontend/                       # Next.js 14 app
+        └── src/app/
+            ├── page.tsx                # Company dashboard (stats, activity feed)
+            └── companies/[id]/inbox/   # Idea inbox + live agent trace panel
+```
+
+---
+
+## Database Models
+
+| Model | Key Fields | Purpose |
+|---|---|---|
+| `Company` | `name`, `description`, `pdf_text`, `frequency_hours`, `next_run_time`, `status` | Company registry. Controls scheduling. |
+| `CompanyProfile` | `space`, `audience`, `brand_voice`, `key_differentiators`, `region` | Cached LLM-extracted profile. Invalidated when company is updated. |
+| `GeneratedIdea` | `hook`, `body`, `cta`, `platform`, `implication_type`, `angle_category`, `angle_detail`, `signal_used`, `status` | Individual content idea. Status: `pending → approved / rejected / refine_requested`. |
+| `RunLog` | `company_id`, `trace_events`, `signal_strength`, `chosen_angle`, `evergreen`, `error` | Full trace of each agent run for debugging and analytics. |
+
+---
+
+## API Reference
+
+### Companies
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/companies/` | List all companies with stats |
+| `POST` | `/api/companies/` | Create a new company |
+| `GET` | `/api/companies/{id}` | Get company details |
+| `PATCH` | `/api/companies/{id}` | Update company settings |
+| `DELETE` | `/api/companies/{id}` | Delete company and all its data |
+| `POST` | `/api/companies/{id}/run` | **Manually trigger an ideation run** |
+| `GET` | `/api/companies/{id}/runs` | List run history with trace events |
+| `GET` | `/api/companies/{id}/ideas` | List ideas (filterable by status) |
+| `GET` | `/api/companies/{id}/angles` | Angle usage analytics |
+
+### Ideas
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/ideas/{id}` | Get a single idea |
+| `PATCH` | `/api/ideas/{id}/approve` | Approve an idea |
+| `PATCH` | `/api/ideas/{id}/reject` | Reject with optional feedback |
+| `POST` | `/api/ideas/{id}/refine` | Request LLM rewrite with feedback |
+
+### System
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/dashboard/stats` | Aggregate metrics (total ideas, win rate) |
+| `GET` | `/api/dashboard/activity` | Recent run activity feed |
+| `GET` | `/health` | API health check |
+| `WS` | `/api/ws/trace/{company_id}` | **Live agent trace WebSocket stream** |
+
+---
+
 ## Development
 
 ### Rebuilding after code changes
@@ -500,25 +570,6 @@ Check Redis is running and the WebSocket connection is established:
 docker compose ps redis
 docker compose logs api | grep -i websocket
 ```
-
----
-
-## Tech Stack
-
-| Layer | Technology | Version |
-|---|---|---|
-| **LLM** | Google Gemini (via `langchain-google-genai`) | 2.0.8 |
-| **Agent Pattern** | LangChain tool-calling (ReAct) | 0.3.13 |
-| **Web Search** | Tavily (DuckDuckGo fallback) | 0.3.3 |
-| **Task Queue** | Celery + Celery Beat | 5.4.0 |
-| **Message Broker** | Redis | 5.1.1 client |
-| **API** | FastAPI + WebSockets | 0.115.0 |
-| **Frontend** | Next.js 14, TypeScript | 14.x |
-| **Database** | PostgreSQL 15 + pgvector | — |
-| **ORM** | SQLAlchemy 2 + Alembic | 2.0.36 |
-| **PDF Parsing** | PyPDF2 / pypdf | — |
-| **Email** | Resend | 0.8.0 |
-| **Container** | Docker Compose | — |
 
 ---
 
