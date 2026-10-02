@@ -350,7 +350,7 @@ class CompanyProfile(Base):
     content_fit = Column(Text)    # What content topics resonate (JSON string)
     brand_voice = Column(Text)    # Tone and communication style
     key_differentiators = Column(Text)  # What makes them unique
-    region = Column(String(100), default='India')  # C4 Fix: region for geo-targeted search
+    region = Column(String(100), default='India')  # Target geographic market for localized news searches
 
     # Cache control
     last_profiled_at = Column(DateTime, default=datetime.utcnow, nullable=False)

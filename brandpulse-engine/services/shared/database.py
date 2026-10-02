@@ -22,7 +22,7 @@ DATABASE_URL = os.getenv(
 # Create engine
 engine = create_engine(
     DATABASE_URL,
-    pool_size=5,          # D1 Fix: Use connection pool instead of NullPool
+    pool_size=5,          # Persistent baseline connection pool for concurrent worker & API traffic
     max_overflow=10,      # Allow up to 15 total connections under load
     pool_timeout=30,      # Wait up to 30s for a connection from pool
     pool_recycle=1800,    # Recycle connections every 30min to avoid stale connections

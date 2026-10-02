@@ -4,6 +4,7 @@ Celery Task: Ideation
 Dispatches and runs the ideation graph for companies asynchronously.
 """
 
+import json
 import logging
 from datetime import datetime
 from celery import shared_task
@@ -78,7 +79,8 @@ def queue_generation_tasks():
 @shared_task(bind=True, max_retries=3)
 def process_company_ideation(self, company_id: int):
     """
-    Celery Worker task: Runs the LangGraph workflow for a single company.
+    Celery Worker task: Executes autonomous ReAct ideation for a single company,
+    handling WebSocket progress notifications, quality-pruned empty runs, and managed retries.
     """
     with get_db_session() as session:
         company = session.query(Company).filter(Company.id == company_id).first()
@@ -90,14 +92,14 @@ def process_company_ideation(self, company_id: int):
         logger.info(f"🏢 Processing {company.name} in background task")
 
         try:
-            # Guard: skip if ideas already pending review
+            # Guard: skip if ideas already pending review or currently rewriting
             pending_count = session.query(GeneratedIdea).filter(
                 GeneratedIdea.company_id == company.id,
-                GeneratedIdea.status == IdeaStatusEnum.PENDING.value
+                GeneratedIdea.status.in_([IdeaStatusEnum.PENDING.value, IdeaStatusEnum.REFINING.value])
             ).count()
 
             if pending_count > 0:
-                logger.warning(f"⏭️ Skipping {company.name} ({pending_count} ideas pending review)")
+                logger.warning(f"⏭️ Skipping {company.name} ({pending_count} ideas pending or refining)")
                 _unlock_and_reschedule(session, company)
                 return
 
@@ -123,7 +125,20 @@ def process_company_ideation(self, company_id: int):
             session.flush()
 
             if not ideas:
-                logger.warning(f"⚠️ 0 ideas survived validation for {company.name}. Skipping storage.")
+                logger.warning(f"⚠️ 0 ideas survived validation for {company.name}. Saving empty RunLog.")
+                # Save empty run log so run history shows what happened
+                empty_run = RunLog(
+                    company_id=company.id,
+                    status="empty",
+                    trace={
+                        "nodes": final_state.get("trace_events", []),
+                        "error": "No ideas survived quality validation",
+                        "ideas_generated": 0,
+                    },
+                    created_at=datetime.utcnow()
+                )
+                session.add(empty_run)
+                session.flush()
                 _unlock_and_reschedule(session, company)
                 return
 
@@ -157,16 +172,50 @@ def process_company_ideation(self, company_id: int):
 
         except Exception as e:
             logger.error(f"❌ Failed for {company.name}: {e}")
-            session.rollback()
-            # If unexpected failure, still try to unlock and retry if Celery handles it
+            try:
+                session.rollback()
+            except Exception:
+                pass
+
+            # Publish retry or fatal event to WebSocket
+            try:
+                r = redis.from_url(redis_url)
+                if self.request.retries >= self.max_retries:
+                    r.publish(f"trace:{company_id}", json.dumps({
+                        "node": "fatal",
+                        "status": "error",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "message": "Run failed after all retry attempts"
+                    }))
+                else:
+                    r.publish(f"trace:{company_id}", json.dumps({
+                        "node": "retry",
+                        "status": "warning",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "attempt": self.request.retries + 1,
+                        "max_retries": self.max_retries
+                    }))
+            except Exception:
+                pass
+
             if self.request.retries >= self.max_retries:
-                # We reached max retries, MUST release the lock permanently
-                company = session.query(Company).filter(Company.id == company_id).first()
-                if company:
-                    company.is_processing = False
-                    session.commit()
-            
-            # Re-raise to trigger Celery retry
+                # Save error RunLog and release lock on final failure
+                try:
+                    with get_db_session() as recovery_session:
+                        error_run = RunLog(
+                            company_id=company_id,
+                            status="error",
+                            trace={"nodes": [], "error": str(e)},
+                            created_at=datetime.utcnow()
+                        )
+                        recovery_session.add(error_run)
+                        comp = recovery_session.query(Company).filter(Company.id == company_id).first()
+                        if comp:
+                            comp.is_processing = False
+                        recovery_session.commit()
+                except Exception as inner_e:
+                    logger.error(f"Failed to save error RunLog: {inner_e}")
+
             raise self.retry(exc=e, countdown=60)
 
 
@@ -188,7 +237,7 @@ def _unlock_and_reschedule(session: Session, company: Company):
 @shared_task(bind=True, max_retries=3)
 def process_idea_refinement(self, idea_id: int):
     """
-    Celery Worker task: Runs the HITL refinement sub-graph for a single idea.
+    Celery Worker task: Executes Human-in-the-Loop (HITL) idea rewrite using admin feedback.
     """
     from services.worker.agent.core import refine_generated_idea
     
@@ -224,5 +273,28 @@ def process_idea_refinement(self, idea_id: int):
 
         except Exception as e:
             logger.error(f"❌ Failed to refine Idea #{idea.id}: {e}")
-            session.rollback()
-            raise self.retry(exc=e, countdown=60)
+            try:
+                session.rollback()
+            except Exception:
+                pass
+
+            if self.request.retries >= self.max_retries:
+                # Reset idea to pending so user can try again
+                try:
+                    with get_db_session() as recovery_session:
+                        idea_rec = recovery_session.query(GeneratedIdea).filter(
+                            GeneratedIdea.id == idea_id
+                        ).first()
+                        if idea_rec:
+                            original_feedback = idea_rec.admin_feedback or ""
+                            idea_rec.status = 'pending'
+                            idea_rec.admin_feedback = (
+                                f"[Rewrite failed — please try again with different feedback]\n\n"
+                                f"Original feedback: {original_feedback}"
+                            )
+                            recovery_session.commit()
+                            logger.info(f"Reset stuck idea #{idea_id} back to pending")
+                except Exception as inner_e:
+                    logger.error(f"Failed to reset stuck idea: {inner_e}")
+            else:
+                raise self.retry(exc=e, countdown=60)
