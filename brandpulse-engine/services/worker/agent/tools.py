@@ -52,14 +52,14 @@ ANGLE_CATEGORIES = [
 ]
 
 
-# ── Tool 1: Recall Company Memory ─────────────────────────────────────────
-# (Created via factory — needs DB session)
+# ── Tool 1: Recall Company Memory & Finish (Database-Aware Factory) ───────────
+# Closes over the active SQLAlchemy session and company model, avoiding global state.
 
 def make_db_tools(company, session):
     """
     Factory: returns (recall_company_memory, finish) tools that close over
     the company ORM object and SQLAlchemy session.
-    Called once per agent run in core.py.
+    Called once per agent run in core.py to ensure transactional scoping.
     """
 
     @tool
@@ -183,7 +183,7 @@ Base your answers on the document. If a field cannot be determined, make a reaso
         })
 
 
-# ── Tool 3: Search Web ─────────────────────────────────────────────────────
+# ── Tool 3: Search Web (Tavily with DuckDuckGo Fallback) ───────────────────
 
 @tool
 def search_web(query: str) -> str:
@@ -197,9 +197,11 @@ def search_web(query: str) -> str:
     Args:
         query: A focused search query (max 150 chars)
     """
+    # Normalize whitespace and enforce character cap to prevent prompt injection or oversized payloads
     query = " ".join(query.split())[:150]
     logger.info(f"🔍 Searching: {query}")
 
+    # Primary search: Tavily API (tailored for autonomous agent research)
     tavily_key = os.getenv("TAVILY_API_KEY", "")
     if tavily_key and tavily_key not in ("your_tavily_api_key_here", ""):
         try:
@@ -216,9 +218,9 @@ def search_web(query: str) -> str:
         except Exception as e:
             logger.warning(f"Tavily failed: {e}, falling back to DuckDuckGo")
 
-    # DuckDuckGo fallback
+    # Secondary search fallback: DuckDuckGo news scrape (zero API key required, filtered to last month)
     try:
-        time.sleep(2)
+        time.sleep(2)  # Pacing delay to avoid scraper rate-limiting
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
             raw = list(ddgs.text(keywords=query, max_results=5, timelimit="m"))

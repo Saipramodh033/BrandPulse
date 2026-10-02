@@ -1,21 +1,17 @@
 """
 Agent Core - ReAct Orchestrator
 ================================
-Implements the autonomous ReAct (Reason + Act) agent loop.
+Autonomous Reason + Act (ReAct) agent loop.
 
-The LLM autonomously decides:
-  - Which tools to call
-  - In what order
-  - How many search attempts to make
-  - When the output is good enough to submit
+The LLM orchestrates execution dynamically:
+  - Chooses which tools to call based on live feedback
+  - Re-evaluates search queries dynamically if market signals are weak
+  - Applies self-critique editorial checks before finalizing ideas
+  - Gracefully falls back to evergreen mode after repeated signal failures
 
-This replaces the previous hardcoded 9-node LangGraph pipeline.
-
-The SAME tools are available, but the LLM is now the orchestrator — not the code.
-
-Entry points (unchanged interface for ideation_task.py):
-  - run_ideation_v4(company, session) → (ideas, final_state)
-  - refine_generated_idea(idea, session) → dict
+Entry points:
+  - run_ideation_v4(company, session) -> (ideas, final_state)
+  - refine_generated_idea(idea, session) -> dict
 """
 
 import json
@@ -25,6 +21,7 @@ import time
 from datetime import datetime
 from typing import Tuple
 
+from sqlalchemy import text
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from services.shared.models import Company
@@ -97,7 +94,7 @@ def run_ideation_v4(company: Company, session) -> Tuple[list, dict]:
         logger.warning(f"⚠️ Redis unavailable — live trace disabled: {e}")
         redis_client = None
 
-    # ── Initial messages ────────────────────────────────────────────────────
+    # ── Initial messages: Prime agent with persona, instructions, and context ──
     company_context = company.pdf_text or f"{company.name}: {company.description or 'No details available.'}"
 
     messages = [
@@ -114,19 +111,46 @@ def run_ideation_v4(company: Company, session) -> Tuple[list, dict]:
     trace_events = []
     final_result = None
 
-    # ── ReAct agent loop ────────────────────────────────────────────────────
+    # ── Autonomous ReAct execution loop (Capped at MAX_ITERATIONS to prevent loops) ──
     for iteration in range(MAX_ITERATIONS):
         logger.info(f"🔄 Agent iteration {iteration + 1}/{MAX_ITERATIONS}")
 
+        # Cooperative cancellation check: query database to verify if an admin clicked 'Force Reset' in the UI.
+        # If is_processing was flipped to False, gracefully abort execution immediately.
+        is_processing = session.execute(
+            text("SELECT is_processing FROM companies WHERE id = :id"),
+            {"id": company.id}
+        ).scalar()
+        
+        if not is_processing:
+            logger.warning(f"⚠️ Agent aborted by user reset on iteration {iteration + 1}")
+            break
+
+        # Query the LLM with current conversation history and bound tools
         try:
             response = agent.invoke(messages)
         except Exception as e:
             logger.error(f"❌ LLM call failed on iteration {iteration + 1}: {e}")
-            break
+            if redis_client:
+                try:
+                    redis_client.publish(
+                        f"trace:{company.id}",
+                        json.dumps({
+                            "node": "error",
+                            "status": "error",
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "message": f"AI model error on step {iteration + 1}"
+                        })
+                    )
+                except Exception:
+                    pass
+            # Re-raise so Celery catches the failure, triggers a retry, and saves the Error RunLog
+            raise
 
+        # Append assistant response (which contains thoughts and tool calls) to message history
         messages.append(response)
 
-        # No tool calls → agent produced a text conclusion
+        # Fallback guard: if the model produced text without invoking any tool, prompt it to continue
         if not response.tool_calls:
             logger.warning("⚠️ Agent produced text without tool call — prompting to continue")
             messages.append(
@@ -134,7 +158,7 @@ def run_ideation_v4(company: Company, session) -> Tuple[list, dict]:
             )
             continue
 
-        # ── Execute each tool call in this iteration ────────────────────────
+        # ── Execute each tool call requested by the LLM ──────────────────────
         for tool_call in response.tool_calls:
             tool_name = tool_call["name"]
             tool_args = tool_call["args"]
@@ -142,7 +166,7 @@ def run_ideation_v4(company: Company, session) -> Tuple[list, dict]:
 
             logger.info(f"🔧 Agent → {tool_name}({list(tool_args.keys())})")
 
-            # Build and publish trace event
+            # Broadcast execution trace event to Redis Pub/Sub for live frontend WebSocket streaming
             trace_event = {
                 "node": tool_name,
                 "timestamp": datetime.utcnow().isoformat(),
@@ -159,7 +183,7 @@ def run_ideation_v4(company: Company, session) -> Tuple[list, dict]:
                 except Exception as e:
                     logger.warning(f"Redis publish failed: {e}")
 
-            # Execute tool
+            # Execute tool safely; capture exceptions as tool error observations rather than crashing
             try:
                 result_str = tool_map[tool_name].invoke(tool_args)
             except Exception as e:
@@ -167,11 +191,12 @@ def run_ideation_v4(company: Company, session) -> Tuple[list, dict]:
                 trace_events[-1]["status"] = "error"
                 logger.error(f"Tool {tool_name} raised: {e}")
 
+            # Return tool observation back to the LLM conversation scratchpad
             messages.append(
                 ToolMessage(content=str(result_str), tool_call_id=tool_id, name=tool_name)
             )
 
-            # Agent called finish — extract result and stop
+            # Terminal tool check: when finish() is executed, extract the validated payload and terminate
             if tool_name == "finish":
                 try:
                     final_result = json.loads(result_str)
@@ -180,16 +205,30 @@ def run_ideation_v4(company: Company, session) -> Tuple[list, dict]:
                         "ideas": [], "angle_category": "", "angle_detail": "",
                         "is_evergreen": False, "signal_description": "",
                     }
-                break  # break inner tool_call loop
+                break  # Exit tool calls loop
 
         if final_result is not None:
-            break  # break outer iteration loop
+            break  # Exit ReAct iterations loop
 
     # ── Build output ────────────────────────────────────────────────────────
     elapsed = time.time() - start_time
 
     if not final_result:
         logger.error(f"❌ Agent did not call finish() after {MAX_ITERATIONS} iterations")
+        # Publish error event so frontend knows what happened
+        if redis_client:
+            try:
+                redis_client.publish(
+                    f"trace:{company.id}",
+                    json.dumps({
+                        "node": "error",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "status": "error",
+                        "message": "Agent used maximum iterations without completing"
+                    })
+                )
+            except Exception:
+                pass
         final_result = {
             "ideas": [], "angle_category": "", "angle_detail": "",
             "is_evergreen": False, "signal_description": "",
@@ -226,6 +265,22 @@ def run_ideation_v4(company: Company, session) -> Tuple[list, dict]:
         "refinement_count": 0,
         "error": None if ideas else "Agent did not produce any ideas",
     }
+
+    # Publish completion event to WebSocket
+    if redis_client:
+        try:
+            redis_client.publish(
+                f"trace:{company.id}",
+                json.dumps({
+                    "node": "complete",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "status": "success" if ideas else "empty",
+                    "ideas_count": len(ideas),
+                    "message": f"{len(ideas)} ideas generated" if ideas else "Run complete — no ideas produced"
+                })
+            )
+        except Exception as e:
+            logger.warning(f"Redis publish (complete) failed: {e}")
 
     logger.info(
         f"✅ ReAct agent complete: {len(ideas)} ideas in {elapsed:.1f}s "
