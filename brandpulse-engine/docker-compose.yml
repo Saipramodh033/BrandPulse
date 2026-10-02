@@ -3,8 +3,10 @@
 # ==================================================================
 # Services:
 #   - postgres: PostgreSQL 15 + pgvector extension
-#   - worker: Autonomous agent + scheduler (Python)
-#   - dashboard: Streamlit admin interface
+#   - redis: Redis broker and Pub/Sub channel
+#   - worker: Celery autonomous ReAct agent & Beat scheduler
+#   - api: FastAPI REST & WebSocket gateway
+#   - frontend: Next.js modern UI dashboard
 # ==================================================================
 
 services:
@@ -81,9 +83,22 @@ services:
       
       # Redis Connection for Celery
       REDIS_URL: redis://redis:6379/0
+      # LLM Provider Configuration
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      LLM_MODEL: ${LLM_MODEL}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS}
+      STRUCTURED_LLM_PROVIDER: ${STRUCTURED_LLM_PROVIDER}
+      STRUCTURED_LLM_MODEL: ${STRUCTURED_LLM_MODEL}
+      STRUCTURED_LLM_TEMPERATURE: ${STRUCTURED_LLM_TEMPERATURE}
+      STRUCTURED_LLM_MAX_TOKENS: ${STRUCTURED_LLM_MAX_TOKENS}
       
-      # Google AI API
+      # API Keys & Custom Endpoints
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GROQ_API_KEY: ${GROQ_API_KEY}
       
       # Resend Email
       RESEND_API_KEY: ${RESEND_API_KEY}
@@ -122,7 +137,7 @@ services:
     command: ["python", "services/worker/scheduler.py"]
 
   # ================================================================
-  # API Service (FastAPI — Phase 2.5+)
+  # API Service (FastAPI REST & WebSocket Gateway)
   # ================================================================
   api:
     build:
@@ -143,8 +158,25 @@ services:
       # Redis Connection for Celery and WebSockets
       REDIS_URL: redis://redis:6379/0
 
-      # API key auth (A2 Fix: leave empty to disable auth in dev)
+      # API key auth (leave empty to disable auth in dev mode)
       API_KEY: ${API_KEY:-}
+
+      # LLM Provider Configuration
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      LLM_MODEL: ${LLM_MODEL}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS}
+      STRUCTURED_LLM_PROVIDER: ${STRUCTURED_LLM_PROVIDER}
+      STRUCTURED_LLM_MODEL: ${STRUCTURED_LLM_MODEL}
+      STRUCTURED_LLM_TEMPERATURE: ${STRUCTURED_LLM_TEMPERATURE}
+      STRUCTURED_LLM_MAX_TOKENS: ${STRUCTURED_LLM_MAX_TOKENS}
+
+      # API Keys & Custom Endpoints
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GROQ_API_KEY: ${GROQ_API_KEY}
 
       # Python environment
       PYTHONUNBUFFERED: 1
@@ -160,7 +192,7 @@ services:
       - brandpulse_network
 
   # ================================================================
-  # Frontend Service (Next.js - Phase 7)
+  # Frontend Service (Next.js 16 Web Application)
   # ================================================================
   frontend:
     build:
