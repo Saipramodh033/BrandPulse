@@ -44,8 +44,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# A2 Fix: Optional API key authentication
-# Set API_KEY env var to enable auth. Leave unset to disable (dev mode).
+# Optional API key authentication middleware
+# Set API_KEY in the environment to enforce authentication. Leave empty/unset for open development mode.
 API_KEY = os.getenv("API_KEY", "")
 
 @app.middleware("http")
@@ -68,29 +68,34 @@ app.include_router(dashboard.router, prefix="/api/dashboard")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 async def redis_listener():
-    """Background task to listen to Redis pub/sub and broadcast to WebSockets.
-    A7 Fix: Includes automatic reconnection on failure.
+    """
+    Background subscriber task: Listens to Redis pub/sub pattern 'trace:*' and
+    broadcasts live agent trace events to connected WebSocket clients per company.
+    Includes an outer loop with automatic backoff reconnection on Redis connection loss.
     """
     while True:  # Outer reconnect loop
         try:
             redis_client = redis.from_url(REDIS_URL)
-            pubsub = redis_client.pubsub()
-            await pubsub.psubscribe("trace:*")
-            logger.info("📡 Subscribed to Redis channel pattern: trace:*")
-            
-            async for message in pubsub.listen():
-                if message["type"] == "pmessage":
-                    channel = message["channel"].decode("utf-8")
-                    company_id_str = channel.split(":")[-1]
-                    try:
-                        company_id = int(company_id_str)
-                        data = json.loads(message["data"].decode("utf-8"))
-                        await websockets.manager.broadcast(company_id, data)
-                    except Exception as e:
-                        logger.error(f"Error processing redis message: {e}")
+            async with redis_client.pubsub() as pubsub:
+                await pubsub.psubscribe("trace:*")
+                logger.info("📡 Subscribed to Redis channel pattern: trace:*")
+                
+                while True:
+                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                    if message is not None:
+                        if message["type"] == "pmessage":
+                            channel = message["channel"].decode("utf-8")
+                            company_id_str = channel.split(":")[-1]
+                            try:
+                                company_id = int(company_id_str)
+                                data = json.loads(message["data"].decode("utf-8"))
+                                await websockets.manager.broadcast(company_id, data)
+                            except Exception as e:
+                                logger.error(f"Error processing redis message: {e}")
+                    await asyncio.sleep(0.01)
         except Exception as e:
             logger.error(f"Redis listener failed: {e}. Reconnecting in 5s...")
-            await asyncio.sleep(5)  # A7 Fix: Wait and retry
+            await asyncio.sleep(5)
 
 @app.on_event("startup")
 async def startup_event():

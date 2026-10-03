@@ -13,13 +13,18 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ws", tags=["WebSockets"])
 
-# Simple in-memory connection manager for WebSockets
+# Thread-safe in-memory connection manager for WebSocket subscribers
 class ConnectionManager:
+    """
+    Manages active client WebSocket connections keyed by company_id.
+    Enables targeted broadcasting so subscribers only receive events for their company.
+    """
     def __init__(self):
-        # Maps company_id to a set of active WebSockets
+        # Maps company_id -> set of active WebSockets
         self.active_connections: Dict[int, Set[WebSocket]] = {}
 
     async def connect(self, websocket: WebSocket, company_id: int):
+        """Accept incoming connection and register under company subscriber pool."""
         await websocket.accept()
         if company_id not in self.active_connections:
             self.active_connections[company_id] = set()
@@ -27,6 +32,7 @@ class ConnectionManager:
         logger.info(f"Client connected to WS for company {company_id}. Total: {len(self.active_connections[company_id])}")
 
     def disconnect(self, websocket: WebSocket, company_id: int):
+        """Unregister closed connection and clean up empty company sets."""
         if company_id in self.active_connections:
             self.active_connections[company_id].discard(websocket)
             logger.info(f"Client disconnected from WS for company {company_id}. Total: {len(self.active_connections[company_id])}")
@@ -34,8 +40,9 @@ class ConnectionManager:
                 del self.active_connections[company_id]
 
     async def broadcast(self, company_id: int, message: dict):
+        """Broadcast a trace event JSON payload to all clients watching this company."""
         if company_id in self.active_connections:
-            # Create a copy to iterate safely
+            # Snapshot set to list to safely handle concurrent disconnections during iteration
             connections = list(self.active_connections[company_id])
             for connection in connections:
                 try:

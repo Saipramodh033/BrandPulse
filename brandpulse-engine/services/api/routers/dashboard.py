@@ -34,7 +34,7 @@ def get_activity(limit: int = 20, db: Session = Depends(get_db)):
     """A unified timeline of recent events across all companies."""
     from sqlalchemy.orm import joinedload
     
-    # A4 Fix: Use joinedload to fetch company in same query — no N+1
+    # Eagerly load associated Company record in the same query to prevent N+1 overhead
     runs = (
         db.query(RunLog)
         .options(joinedload(RunLog.company))
