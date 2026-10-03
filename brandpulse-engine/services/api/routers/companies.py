@@ -25,7 +25,7 @@ def list_companies(db: Session = Depends(get_db)):
     """List all companies ordered by creation date."""
     companies = db.query(Company).order_by(Company.created_at.desc()).all()
     
-    # A3 Fix: Batch pending counts in a single query instead of N+1
+    # Batch query pending idea counts in a single aggregation to eliminate N+1 overhead
     company_ids = [c.id for c in companies]
     pending_counts = {}
     if company_ids:
@@ -149,19 +149,26 @@ def trigger_run(company_id: int, db: Session = Depends(get_db)):
     if company.status != CompanyStatusEnum.ACTIVE:
         raise HTTPException(status_code=400, detail="Company is paused")
 
-    # A5 Fix: Mirror the Inbox Zero rule — don't trigger if ideas are pending
+    if company.is_processing:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot trigger run: Agent is already generating ideas. Please wait or force reset."
+        )
+
+    # Enforce Inbox Zero constraint: do not trigger new generation while ideas are pending review or rewriting
     pending_count = db.query(func.count(GeneratedIdea.id)).filter(
         GeneratedIdea.company_id == company_id,
-        GeneratedIdea.status == 'pending'
+        GeneratedIdea.status.in_(['pending', 'refining'])
     ).scalar() or 0
     if pending_count > 0:
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot trigger run: {pending_count} ideas are pending review. Clear your inbox first."
+            detail=f"Cannot trigger run: {pending_count} ideas are pending review or rewriting. Clear your inbox first."
         )
 
     company.next_run_time = datetime.utcnow()
-    company.is_processing = False  # Break any stuck locks
+    # Lock is safely removed because we know it wasn't true, but resetting here ensures consistency
+    company.is_processing = False  
     company.updated_at = datetime.utcnow()
     db.commit()
     return {"message": f"Run triggered for {company.name}", "company_id": company_id}
@@ -309,19 +316,34 @@ def get_company_ideas(
             "body": idea.body,
             "cta": idea.cta,
             "platform": idea.platform,
-            "implication_type": idea.implication_type,  # F3 Fix: was missing
+            "implication_type": idea.implication_type,
             "angle_category": idea.angle_category,
             "angle_detail": idea.angle_detail,
             "is_wildcard": idea.is_wildcard,
             "signal_used": idea.signal_used,
             "status": idea.status,
             "admin_feedback": idea.admin_feedback,
-            "evergreen": idea.evergreen,               # F3 Fix: was missing
-            "run_log_id": idea.run_log_id,             # F3 Fix: was missing
+            "evergreen": idea.evergreen,
+            "run_log_id": idea.run_log_id,
             "created_at": idea.created_at,
         }
         for idea in ideas
     ]
+
+
+@router.post("/{company_id}/reset-lock", status_code=200)
+def reset_stuck_lock(company_id: int, db: Session = Depends(get_db)):
+    """Emergency: clear a stuck is_processing lock on a company."""
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    if not company.is_processing:
+        return {"message": "Company is not locked", "company_id": company_id, "was_locked": False}
+    company.is_processing = False
+    company.updated_at = datetime.utcnow()
+    db.commit()
+    logger.info(f"🔓 Cleared stuck lock for company {company.name} (id={company_id})")
+    return {"message": f"Lock cleared for {company.name}", "company_id": company_id, "was_locked": True}
 
 
 @router.delete("/{company_id}", status_code=status.HTTP_204_NO_CONTENT)
