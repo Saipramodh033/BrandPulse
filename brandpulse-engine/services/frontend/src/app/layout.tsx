@@ -1,9 +1,7 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import "./globals.css";
 import Sidebar from "@/components/Sidebar";
-
-const inter = Inter({ subsets: ["latin"] });
+import { Providers } from "./providers";
 
 export const metadata: Metadata = {
   title: "BrandPulse Dashboard",
@@ -17,13 +15,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={inter.className}>
-        <div className="layout-container">
-          <Sidebar />
-          <main className="main-content">
-            {children}
-          </main>
-        </div>
+      <body>
+        <Providers>
+          <div className="layout-container">
+            <Sidebar />
+            <main className="main-content">
+              {children}
+            </main>
+          </div>
+        </Providers>
       </body>
     </html>
   );
