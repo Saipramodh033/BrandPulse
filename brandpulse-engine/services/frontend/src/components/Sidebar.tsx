@@ -1,41 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-
-interface Company {
-  id: number;
-  name: string;
-  is_processing: boolean;
-  pending_ideas_count: number | null;
-}
+import { useCompanies } from "@/hooks/useCompanies";
 
 export default function Sidebar() {
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data: companies = [], isLoading } = useCompanies();
   const pathname = usePathname();
-
-  useEffect(() => {
-    const fetchCompanies = async () => {
-      try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
-        const res = await fetch(`${apiUrl}/companies/`);
-        if (res.ok) {
-          const data = await res.json();
-          setCompanies(data);
-        }
-      } catch (err) {
-        console.error("Failed to fetch companies:", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchCompanies();
-    const interval = setInterval(fetchCompanies, 5000);
-    return () => clearInterval(interval);
-  }, []);
 
   return (
     <aside className="sidebar glass-panel">
@@ -59,7 +30,7 @@ export default function Sidebar() {
         <div className="section-label">Companies</div>
 
         <div className="company-list">
-          {loading ? (
+          {isLoading ? (
             <div style={{ padding: '0 16px', color: 'var(--text-muted)' }}>Loading...</div>
           ) : companies.length === 0 ? (
             <div style={{ padding: '0 16px', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
@@ -77,6 +48,9 @@ export default function Sidebar() {
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   {company.is_processing && <span className="processing-pulse"></span>}
+                  {!company.is_processing && company.status === 'paused' && (
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600, lineHeight: 1, flexShrink: 0 }}>⏸</span>
+                  )}
                   <span style={{
                     maxWidth: company.pending_ideas_count ? '120px' : '160px',
                     whiteSpace: 'nowrap',

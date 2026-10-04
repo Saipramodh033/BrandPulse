@@ -1,26 +1,25 @@
 "use client";
 
 import { useEffect, useState, use } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { API_URL } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import styles from "./settings.module.css";
-import { Play, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 export default function CompanySettings({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const queryClient = useQueryClient();
 
-  const [company, setCompany] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmPause, setConfirmPause] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  // B6 Fix: run trigger state
-  const [triggerLoading, setTriggerLoading] = useState(false);
-  const [triggerMsg, setTriggerMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   // Form state
   const [name, setName] = useState("");
@@ -30,9 +29,8 @@ export default function CompanySettings({ params }: { params: Promise<{ id: stri
 
   useEffect(() => {
     fetch(`${API_URL}/companies/${id}`)
-      .then(r => r.json())
-      .then(data => {
-        setCompany(data);
+      .then((r) => r.json())
+      .then((data) => {
         setName(data.name || "");
         setDescription(data.description || "");
         setFrequencyHours(data.frequency_hours || 24);
@@ -49,12 +47,15 @@ export default function CompanySettings({ params }: { params: Promise<{ id: stri
     setErrorMsg(null);
     try {
       const res = await fetch(`${API_URL}/companies/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description, frequency_hours: frequencyHours, status })
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description, frequency_hours: frequencyHours, status }),
       });
       if (!res.ok) throw new Error(`Server ${res.status}`);
       setSaveMsg("Changes saved successfully.");
+      setTimeout(() => setSaveMsg(null), 4000);
+      queryClient.invalidateQueries({ queryKey: ["company", String(id)] });
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
     } catch (err: any) {
       setErrorMsg(`Save failed: ${err.message}`);
     } finally {
@@ -62,42 +63,15 @@ export default function CompanySettings({ params }: { params: Promise<{ id: stri
     }
   };
 
-  // B6 Fix: manual run trigger handler
-  const handleTriggerRun = async () => {
-    if (triggerLoading) return;
-    setTriggerLoading(true);
-    setTriggerMsg(null);
-    try {
-      const res = await fetch(`${API_URL}/companies/${id}/run`, { method: 'POST' });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        if (res.status === 409) {
-          setTriggerMsg({
-            text: body.detail || 'Clear the inbox (approve/reject pending ideas) before triggering a new run.',
-            type: 'error'
-          });
-        } else {
-          setTriggerMsg({ text: `Failed: ${res.status}`, type: 'error' });
-        }
-        return;
-      }
-      setTriggerMsg({
-        text: '✓ Run queued — the AI pipeline will start within 60 seconds. Check the Inbox for results.',
-        type: 'success'
-      });
-    } finally {
-      setTriggerLoading(false);
-    }
-  };
-
   const handleDelete = async () => {
     if (deleting) return;
     setDeleting(true);
     try {
-      const res = await fetch(`${API_URL}/companies/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${API_URL}/companies/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(`Server ${res.status}`);
       setDeleteConfirmText("");
-      router.push('/');
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
+      router.push("/");
     } catch (err: any) {
       setErrorMsg(`Delete failed: ${err.message}`);
       setDeleting(false);
@@ -105,16 +79,18 @@ export default function CompanySettings({ params }: { params: Promise<{ id: stri
   };
 
   const handleToggleStatus = async () => {
-    const newStatus = status === 'active' ? 'paused' : 'active';
+    const newStatus = status === "active" ? "paused" : "active";
     setSaving(true);
     try {
       const res = await fetch(`${API_URL}/companies/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus })
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus }),
       });
       if (!res.ok) throw new Error(`Server ${res.status}`);
       setStatus(newStatus);
+      queryClient.invalidateQueries({ queryKey: ["company", String(id)] });
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
     } catch (err: any) {
       setErrorMsg(`Failed: ${err.message}`);
     } finally {
@@ -154,93 +130,86 @@ export default function CompanySettings({ params }: { params: Promise<{ id: stri
           />
         </div>
         <div className={styles.field}>
-          <label className={styles.label}>Ideation Frequency (hours)</label>
-          <input
+          <label className={styles.label}>Ideation Frequency</label>
+          <select
             className={styles.input}
-            type="number"
-            min={1}
-            max={168}
-            value={frequencyHours}
-            onChange={(e) => setFrequencyHours(Number(e.target.value))}
-          />
-          <span className={styles.hint}>Runs every {frequencyHours}h ({(frequencyHours / 24).toFixed(1)}d)</span>
+            value={[6, 12, 24, 48].includes(frequencyHours) ? frequencyHours : "custom"}
+            onChange={(e) => {
+              if (e.target.value !== "custom") {
+                setFrequencyHours(Number(e.target.value));
+              }
+            }}
+          >
+            <option value={6}>Every 6 hours (0.25d)</option>
+            <option value={12}>Every 12 hours (0.5d)</option>
+            <option value={24}>Every 24 hours (1d)</option>
+            <option value={48}>Every 48 hours (2d)</option>
+            <option value="custom">Custom...</option>
+          </select>
+          {![6, 12, 24, 48].includes(frequencyHours) && (
+            <input
+              className={styles.input}
+              type="number"
+              min={1}
+              max={168}
+              value={frequencyHours}
+              onChange={(e) => setFrequencyHours(Number(e.target.value))}
+              style={{ marginTop: "8px" }}
+              placeholder="Enter custom hours"
+            />
+          )}
           {frequencyHours < 4 && (
-            <span style={{ color: '#f59e0b', fontSize: '0.8rem', display: 'block', marginTop: '4px' }}>
-              ⚠️ At this rate you may hit Gemini free-tier rate limits. Recommended: 24h.
+            <span style={{ color: "#f59e0b", fontSize: "0.8rem", display: "block", marginTop: "4px" }}>
+              ⚠️ Very frequent generation may exhaust AI model rate limits. Recommended: 24h or more.
             </span>
           )}
         </div>
         <button className="btn-primary" onClick={handleSave} disabled={saving}>
-          {saving ? 'Saving...' : 'Save Changes'}
+          {saving ? "Saving..." : "Save Changes"}
         </button>
       </section>
 
       {/* Run Schedule */}
       <section className={styles.section}>
-        <h3 className={styles.sectionTitle}>Run Schedule</h3>
+        <h3 className={styles.sectionTitle}>Auto-Generation Schedule</h3>
         <div className={styles.statusRow}>
           <div>
             <div className={styles.statusName}>
-              Schedule: <span className={status === 'active' ? styles.statusActive : styles.statusPaused}>{status}</span>
+              Schedule:{" "}
+              <span className={status === "active" ? styles.statusActive : styles.statusPaused}>
+                {status === "active" ? "Active" : "Paused"}
+              </span>
             </div>
             <div className={styles.statusDesc}>
-              {status === 'active'
-                ? 'The engine will automatically run ideation on schedule.'
-                : 'Automated runs are paused. You can still trigger runs manually below.'}
+              {status === "active"
+                ? "The AI engine will automatically generate ideas on the schedule above."
+                : "Automated generation is paused. Head to the Inbox to trigger a manual run."}
             </div>
           </div>
-          <button className="btn-secondary" onClick={handleToggleStatus} disabled={saving}>
-            {status === 'active' ? 'Pause Schedule' : 'Resume Schedule'}
-          </button>
-        </div>
-      </section>
-
-      {/* B6 Fix: Manual Run Trigger */}
-      <section className={styles.section}>
-        <h3 className={styles.sectionTitle}>Manual Run</h3>
-        <div className={styles.statusRow}>
-          <div>
-            <div className={styles.statusName}>Trigger Ideation Now</div>
-            <div className={styles.statusDesc}>
-              Run the AI pipeline immediately, regardless of the schedule.
-              Requires the inbox to be empty (no pending ideas).
+          {!confirmPause ? (
+            <button className="btn-secondary" onClick={() => status === "active" ? setConfirmPause(true) : handleToggleStatus()} disabled={saving}>
+              {status === "active" ? "Pause Schedule" : "Resume Schedule"}
+            </button>
+          ) : (
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Are you sure?</span>
+              <button className="btn-secondary" onClick={() => setConfirmPause(false)}>Cancel</button>
+              <button className="btn-primary" onClick={() => { setConfirmPause(false); handleToggleStatus(); }} disabled={saving}>
+                Yes, Pause
+              </button>
             </div>
-          </div>
-          <button
-            className="btn-primary"
-            onClick={handleTriggerRun}
-            disabled={triggerLoading}
-            style={{ display: 'flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap' }}
-          >
-            {triggerLoading
-              ? <><Loader2 size={15} style={{ animation: 'spin 1s linear infinite' }} /> Queuing…</>
-              : <><Play size={15} /> Trigger Now</>
-            }
-          </button>
+          )}
         </div>
-        {triggerMsg && (
-          <div style={{
-            marginTop: '10px',
-            padding: '10px 14px',
-            borderRadius: '6px',
-            fontSize: '0.85rem',
-            background: triggerMsg.type === 'success' ? 'rgba(16, 185, 129, 0.08)' : 'rgba(239, 68, 68, 0.08)',
-            border: `1px solid ${triggerMsg.type === 'success' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'}`,
-            color: triggerMsg.type === 'success' ? 'var(--status-success)' : '#ef4444',
-          }}>
-            {triggerMsg.text}
-          </div>
-        )}
       </section>
 
       {/* Danger Zone */}
       <section className={`${styles.section} ${styles.dangerSection}`}>
-        <h3 className={styles.sectionTitle} style={{ color: '#ef4444' }}>Danger Zone</h3>
+        <h3 className={styles.sectionTitle} style={{ color: "#ef4444" }}>Danger Zone</h3>
         {!confirmDelete ? (
           <div className={styles.dangerRow}>
             <div>
               <div className={styles.dangerTitle}>Delete Company</div>
-              <div className={styles.dangerDesc}>This permanently removes the company and all its ideas, runs, and angle memory. This cannot be undone.</div>
+              <div className={styles.dangerDesc}>This permanently removes the company and all its ideas, runs, and strategy memory. This cannot be undone.</div>
             </div>
             <button className={styles.btnDanger} onClick={() => setConfirmDelete(true)}>
               Delete Company
@@ -255,16 +224,16 @@ export default function CompanySettings({ params }: { params: Promise<{ id: stri
               placeholder="type delete"
               value={deleteConfirmText}
               onChange={(e) => setDeleteConfirmText(e.target.value)}
-              style={{ marginBottom: '12px' }}
+              style={{ marginBottom: "12px" }}
             />
             <div className={styles.confirmActions}>
               <button className="btn-secondary" onClick={() => { setConfirmDelete(false); setDeleteConfirmText(""); }}>Cancel</button>
               <button
                 className={styles.btnDanger}
                 onClick={handleDelete}
-                disabled={deleting || deleteConfirmText !== 'delete'}
+                disabled={deleting || deleteConfirmText !== "delete"}
               >
-                {deleting ? 'Deleting...' : 'Yes, Delete'}
+                {deleting ? "Deleting..." : "Yes, Delete"}
               </button>
             </div>
           </div>

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Plus, X, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { API_URL } from "@/lib/api";
 
 export default function AddCompanyModal() {
@@ -10,6 +11,7 @@ export default function AddCompanyModal() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
+  const queryClient = useQueryClient();
 
   const [formData, setFormData] = useState({
     name: "",
@@ -18,7 +20,7 @@ export default function AddCompanyModal() {
     frequency_hours: 24,
   });
 
-  // U7 Fix: clear error and form when modal closes
+  // Resets validation errors and form state upon modal dismissal
   const closeModal = () => {
     setIsOpen(false);
     setError(null);
@@ -42,8 +44,10 @@ export default function AddCompanyModal() {
         throw new Error(data.detail || "Failed to add company");
       }
 
+      const newCompany = await res.json();
       closeModal();
-      router.refresh();
+      queryClient.invalidateQueries({ queryKey: ["companies"] });
+      router.push(`/companies/${newCompany.id}/inbox`);
     } catch (err: any) {
       setError(err.message);
     } finally {

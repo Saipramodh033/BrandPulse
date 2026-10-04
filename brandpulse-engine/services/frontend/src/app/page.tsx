@@ -1,21 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { API_URL } from "@/lib/api";
+import { useCompanies, Company } from "@/hooks/useCompanies";
 import AddCompanyModal from "@/components/AddCompanyModal";
 import styles from "./page.module.css";
-
-interface Company {
-  id: number;
-  name: string;
-  description: string | null;
-  status: string;
-  frequency_hours: number;
-  next_run_time: string | null;
-  is_processing: boolean;
-  pending_ideas_count: number | null;
-}
 
 interface Stats {
   total_ideas_generated: number;
@@ -36,7 +26,7 @@ interface ActivityEvent {
 }
 
 function formatRelativeTime(isoDate: string): string {
-  // Ensure the date string is treated as UTC if backend omits the 'Z'
+  if (!isoDate) return "—";
   const dateStr = (!isoDate.endsWith('Z') && !isoDate.includes('+') && !isoDate.includes('-', 10)) ? isoDate + 'Z' : isoDate;
   const diff = Date.now() - new Date(dateStr).getTime();
   
@@ -58,38 +48,37 @@ function formatRelativeTime(isoDate: string): string {
 }
 
 export default function DashboardHome() {
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [activity, setActivity] = useState<ActivityEvent[]>([]);
-  const [loading, setLoading] = useState(true);
+  const {
+    data: companies = [],
+    isLoading: companiesLoading,
+    error: companiesError,
+  } = useCompanies();
 
-  const fetchData = async () => {
-    try {
-      const [companiesRes, statsRes, activityRes] = await Promise.all([
-        fetch(`${API_URL}/companies/`),
-        fetch(`${API_URL}/dashboard/stats`),
-        fetch(`${API_URL}/dashboard/activity?limit=10`),
-      ]);
-      const [companiesData, statsData, activityData] = await Promise.all([
-        companiesRes.json(),
-        statsRes.json(),
-        activityRes.json(),
-      ]);
-      setCompanies(companiesData);
-      setStats(statsData);
-      setActivity(activityData);
-    } catch (err) {
-      console.error("Dashboard fetch error:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const {
+    data: stats,
+    isLoading: statsLoading,
+  } = useQuery<Stats>({
+    queryKey: ["dashboard", "stats"],
+    queryFn: async () => {
+      const res = await fetch(`${API_URL}/dashboard/stats`);
+      if (!res.ok) throw new Error("Failed to fetch dashboard stats");
+      return res.json();
+    },
+    refetchInterval: 8000,
+  });
 
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 8000);
-    return () => clearInterval(interval);
-  }, []);
+  const {
+    data: activity = [],
+    isLoading: activityLoading,
+  } = useQuery<ActivityEvent[]>({
+    queryKey: ["dashboard", "activity"],
+    queryFn: async () => {
+      const res = await fetch(`${API_URL}/dashboard/activity?limit=10`);
+      if (!res.ok) throw new Error("Failed to fetch activity feed");
+      return res.json();
+    },
+    refetchInterval: 8000,
+  });
 
   return (
     <div className={styles.container}>
@@ -102,11 +91,20 @@ export default function DashboardHome() {
       </header>
 
       {/* Stats Row */}
-      {stats && (
+      {statsLoading ? (
+        <div className={styles.statsRow}>
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className={styles.statCard} style={{ opacity: 0.6 }}>
+              <div className={styles.statValue}>...</div>
+              <div className={styles.statLabel}>Loading</div>
+            </div>
+          ))}
+        </div>
+      ) : stats ? (
         <div className={styles.statsRow}>
           <div className={styles.statCard}>
             <div className={styles.statValue}>{stats.total_ideas_generated}</div>
-            <div className={styles.statLabel}>Ideas Generated</div>
+            <div className={styles.statLabel}>Total Ideas</div>
           </div>
           <div className={styles.statCard}>
             <div className={styles.statValue}>{stats.total_approved}</div>
@@ -114,80 +112,91 @@ export default function DashboardHome() {
           </div>
           <div className={styles.statCard}>
             <div className={styles.statValue}>{stats.total_pending}</div>
-            <div className={styles.statLabel}>Awaiting Review</div>
+            <div className={styles.statLabel}>Pending Review</div>
           </div>
           <div className={`${styles.statCard} ${styles.statHighlight}`}>
             <div className={styles.statValue}>{stats.overall_win_rate}%</div>
-            <div className={styles.statLabel}>Win Rate</div>
+            <div className={styles.statLabel}>Approval Rate</div>
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* Main content: Company table + Activity feed */}
       <div className={styles.mainGrid}>
         {/* Company Command Table */}
         <div className={styles.tableSection}>
           <h2 className={styles.sectionTitle}>Companies</h2>
-          {loading ? (
-            <div className={styles.loadingState}>Loading...</div>
+          {companiesLoading ? (
+            <div className={styles.loadingState}>Loading companies...</div>
+          ) : companiesError ? (
+            <div className={styles.emptyState}>
+              <p style={{ color: "var(--status-error)" }}>Failed to load companies.</p>
+              <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", marginTop: "8px" }}>
+                Please ensure the backend engine is running.
+              </p>
+            </div>
           ) : companies.length === 0 ? (
             <div className={styles.emptyState}>
               <p>No companies yet.</p>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '8px' }}>
+              <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", marginTop: "8px" }}>
                 Click <strong>+ Add Company</strong> in the top right to get started.
               </p>
             </div>
           ) : (
-            <div className={styles.table}>
-              <div className={styles.tableHeader}>
-                <span>Company</span>
-                <span>Status</span>
-                <span>Pending</span>
-                <span>Next Run</span>
-                <span>Action</span>
+            <div className={styles.table} role="table" aria-label="Companies List">
+              <div className={styles.tableHeader} role="row">
+                <span role="columnheader">Company</span>
+                <span role="columnheader">Status</span>
+                <span role="columnheader">Pending</span>
+                <span role="columnheader">Next Run</span>
+                <span role="columnheader">Action</span>
               </div>
-              {companies.map((company) => (
-                <div key={company.id} className={styles.tableRow}>
-                  <div className={styles.companyCell}>
-                    <Link href={`/companies/${company.id}/inbox`} className={styles.companyLink}>
-                      {company.is_processing && <span className="processing-pulse" style={{ marginRight: '8px' }} />}
-                      <span>{company.name}</span>
-                    </Link>
-                    {company.description && (
-                      <span className={styles.companyDesc}>
-                        {company.description.substring(0, 50)}{company.description.length > 50 ? '...' : ''}
-                      </span>
-                    )}
-                  </div>
-                  <div>
-                    <span className={`${styles.statusBadge} ${company.status === 'active' ? styles.statusActive : styles.statusPaused}`}>
-                      {company.is_processing ? 'Running' : company.status}
-                    </span>
-                  </div>
-                  <div>
-                    {company.pending_ideas_count ? (
-                      <Link href={`/companies/${company.id}/inbox`} className={styles.pendingBadge}>
-                        {company.pending_ideas_count} pending
+              <div role="rowgroup">
+                {companies.map((company: Company) => (
+                  <div key={company.id} className={styles.tableRow} role="row">
+                    <div className={styles.companyCell} role="cell">
+                      <Link href={`/companies/${company.id}/inbox`} className={styles.companyLink}>
+                        {company.is_processing && <span className="processing-pulse" style={{ marginRight: "8px" }} />}
+                        <span>{company.name}</span>
                       </Link>
-                    ) : (
-                      <span style={{ color: 'var(--text-muted)' }}>—</span>
-                    )}
+                      {company.description && (
+                        <span className={styles.companyDesc}>
+                          {company.description.substring(0, 50)}{company.description.length > 50 ? "..." : ""}
+                        </span>
+                      )}
+                    </div>
+                    <div role="cell">
+                      <span className={`${styles.statusBadge} ${company.status === "active" ? styles.statusActive : styles.statusPaused}`}>
+                        {company.is_processing ? "Generating" :
+                         company.status === "active" ? "Scheduled" :
+                         "Paused"}
+                      </span>
+                    </div>
+                    <div role="cell">
+                      {company.pending_ideas_count ? (
+                        <Link href={`/companies/${company.id}/inbox`} className={styles.pendingBadge}>
+                          {company.pending_ideas_count} pending
+                        </Link>
+                      ) : (
+                        <span style={{ color: "var(--text-muted)" }}>—</span>
+                      )}
+                    </div>
+                    <div className={styles.nextRun} role="cell">
+                      {company.next_run_time
+                        ? formatRelativeTime(company.next_run_time)
+                        : "—"}
+                    </div>
+                    <div className={styles.rowActions} role="cell">
+                      <Link href={`/companies/${company.id}/inbox`} className={styles.actionBtn}>
+                        Inbox
+                      </Link>
+                      <Link href={`/companies/${company.id}/settings`} className={styles.actionBtnSecondary}>
+                        Settings
+                      </Link>
+                    </div>
                   </div>
-                  <div className={styles.nextRun}>
-                    {company.next_run_time
-                      ? formatRelativeTime(company.next_run_time)
-                      : '—'}
-                  </div>
-                  <div className={styles.rowActions}>
-                    <Link href={`/companies/${company.id}/inbox`} className={styles.actionBtn}>
-                      Inbox
-                    </Link>
-                    <Link href={`/companies/${company.id}/settings`} className={styles.actionBtnSecondary}>
-                      Settings
-                    </Link>
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -195,22 +204,29 @@ export default function DashboardHome() {
         {/* Activity Feed */}
         <div className={styles.activitySection}>
           <h2 className={styles.sectionTitle}>Recent Runs</h2>
-          {activity.length === 0 ? (
+          {activityLoading ? (
+            <div className={styles.emptyActivity}>Loading activity...</div>
+          ) : activity.length === 0 ? (
             <div className={styles.emptyActivity}>No runs yet.</div>
           ) : (
             <div className={styles.activityFeed}>
               {activity.map((event, i) => (
-                <div key={i} className={styles.activityItem}>
-                  <div className={`${styles.activityDot} ${event.status === 'success' ? styles.dotSuccess : styles.dotError}`} />
+                <Link key={i} href={`/companies/${event.company_id}/inbox`} className={styles.activityItem} style={{ textDecoration: 'none' }}>
+                  <div className={`${styles.activityDot} ${
+                    event.status === "success" ? styles.dotSuccess :
+                    event.status === "empty" ? styles.dotEmpty :
+                    styles.dotError
+                  }`} />
                   <div className={styles.activityContent}>
                     <span className={styles.activityCompany}>{event.company_name}</span>
                     <span className={styles.activityMeta}>
-                      {event.ideas_generated} idea{event.ideas_generated !== 1 ? 's' : ''}
-                      {event.evergreen ? ' · evergreen' : ' · signal-driven'}
+                      {event.status === "empty" ? "0 ideas — no results" :
+                       event.status === "error" ? "Run failed" :
+                       `${event.ideas_generated} idea${event.ideas_generated !== 1 ? "s" : ""} generated`}
                     </span>
                     <span className={styles.activityTime}>{formatRelativeTime(event.created_at)}</span>
                   </div>
-                </div>
+                </Link>
               ))}
             </div>
           )}

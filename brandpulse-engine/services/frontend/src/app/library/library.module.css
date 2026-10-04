@@ -187,6 +187,27 @@
   border-left: 2px solid var(--accent-dark);
 }
 
+/* Card metadata (company + date) */
+.cardMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+}
+
+.cardCompany {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.cardDate {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
 /* Empty state */
 .emptyState {
   grid-column: 1 / -1;

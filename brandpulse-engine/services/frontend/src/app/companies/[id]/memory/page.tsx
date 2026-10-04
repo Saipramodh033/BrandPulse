@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { use } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { API_URL } from "@/lib/api";
 import styles from "./memory.module.css";
 
@@ -16,22 +17,21 @@ interface AngleCoverage {
 
 export default function CompanyMemory({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const [angles, setAngles] = useState<AngleCoverage[]>([]);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetch(`${API_URL}/companies/${id}/angles`)
-      .then(r => r.json())
-      .then(data => {
-        if (Array.isArray(data)) setAngles(data);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [id]);
+  const { data: angles = [], isLoading: loading, isError } = useQuery<AngleCoverage[]>({
+    queryKey: ["company", id, "angles"],
+    queryFn: async () => {
+      const res = await fetch(`${API_URL}/companies/${id}/angles`);
+      if (!res.ok) throw new Error("Failed to fetch angle memory");
+      return res.json();
+    },
+    enabled: !!id,
+    staleTime: 5000,
+  });
 
-  const usedAngles = angles.filter(a => a.status === 'used' && !a.is_wildcard);
-  const unusedAngles = angles.filter(a => a.status === 'unused');
-  const wildcards = angles.filter(a => a.is_wildcard);
+  const usedAngles = angles.filter((a) => a.status === "used" && !a.is_wildcard);
+  const unusedAngles = angles.filter((a) => a.status === "unused");
+  const wildcards = angles.filter((a) => a.is_wildcard);
   const totalUsed = usedAngles.length + wildcards.length;
   const totalAngles = angles.length;
   const coverage = totalAngles > 0 ? Math.round((totalUsed / totalAngles) * 100) : 0;
@@ -40,13 +40,13 @@ export default function CompanyMemory({ params }: { params: Promise<{ id: string
     <div className={styles.container}>
       <header className={styles.header}>
         <div>
-          <h2 className={styles.title}>Content Angle Memory</h2>
-          <p className={styles.subtitle}>Which angles have been explored — and which are still opportunities.</p>
+          <h2 className={styles.title}>Content Strategy</h2>
+          <p className={styles.subtitle}>Track which content themes have been explored — and which are untapped opportunities.</p>
         </div>
         <div className={styles.coverageSummary}>
           <div className={styles.coverageNum}>{coverage}%</div>
           <div className={styles.coverageLabel}>Coverage</div>
-          <div className={styles.coverageSub}>{totalUsed} / {totalAngles} angles explored</div>
+          <div className={styles.coverageSub}>{totalUsed} / {totalAngles} themes explored</div>
         </div>
       </header>
 
@@ -56,37 +56,42 @@ export default function CompanyMemory({ params }: { params: Promise<{ id: string
       </div>
 
       {loading ? (
-        <div className={styles.loading}>Loading angle memory...</div>
+        <div className={styles.loading}>Loading strategy data…</div>
+      ) : isError ? (
+        <div className={styles.empty}>Could not load strategy data. Please try refreshing the page.</div>
       ) : (
         <>
-          {/* Opportunity section: unused angles */}
+          {/* Untapped Themes: unused angles */}
           {unusedAngles.length > 0 && (
             <section className={styles.section}>
               <h3 className={styles.sectionTitle}>
-                <span className={styles.sectionDot} style={{ background: 'var(--accent-base)' }} />
-                Unexplored Opportunities ({unusedAngles.length})
+                <span className={styles.sectionDot} style={{ background: "var(--accent-base)" }} />
+                Untapped Themes ({unusedAngles.length})
               </h3>
               <div className={styles.angleGrid}>
-                {unusedAngles.map(angle => (
+                {unusedAngles.map((angle) => (
                   <div key={angle.id} className={`${styles.angleCard} ${styles.angleUnused}`}>
                     <div className={styles.angleCategory}>{angle.category}</div>
-                    <div className={styles.angleStatus}>Never Used</div>
+                    <div className={styles.angleStatus}>Not yet explored</div>
                   </div>
                 ))}
               </div>
             </section>
           )}
 
-          {/* Used angles */}
+          {/* Explored Themes */}
           {usedAngles.length > 0 && (
             <section className={styles.section}>
               <h3 className={styles.sectionTitle}>
-                <span className={styles.sectionDot} style={{ background: 'var(--status-success)' }} />
-                Used Angles ({usedAngles.length})
+                <span className={styles.sectionDot} style={{ background: "var(--status-success)" }} />
+                Explored Themes ({usedAngles.length})
               </h3>
               <div className={styles.angleGrid}>
-                {usedAngles.map(angle => {
-                  const winRate = angle.idea_count > 0 ? Math.round((angle.approved_count / angle.idea_count) * 100) : 0;
+                {usedAngles.map((angle) => {
+                  const approvalRate =
+                    angle.idea_count > 0
+                      ? Math.round((angle.approved_count / angle.idea_count) * 100)
+                      : 0;
                   return (
                     <div key={angle.id} className={`${styles.angleCard} ${styles.angleUsed}`}>
                       <div className={styles.angleCategory}>{angle.category}</div>
@@ -95,10 +100,10 @@ export default function CompanyMemory({ params }: { params: Promise<{ id: string
                       )}
                       <div className={styles.angleStats}>
                         <span>{angle.idea_count} ideas</span>
-                        <span className={styles.winRate}>{winRate}% approved</span>
+                        <span className={styles.winRate}>{approvalRate}% approval rate</span>
                       </div>
                       <div className={styles.miniBar}>
-                        <div className={styles.miniBarFill} style={{ width: `${winRate}%` }} />
+                        <div className={styles.miniBarFill} style={{ width: `${approvalRate}%` }} />
                       </div>
                     </div>
                   );
@@ -107,16 +112,19 @@ export default function CompanyMemory({ params }: { params: Promise<{ id: string
             </section>
           )}
 
-          {/* Wildcards */}
+          {/* Experimental Themes (wildcards) */}
           {wildcards.length > 0 && (
             <section className={styles.section}>
               <h3 className={styles.sectionTitle}>
-                <span className={styles.sectionDot} style={{ background: '#a78bfa' }} />
-                Wildcard Angles ({wildcards.length})
+                <span className={styles.sectionDot} style={{ background: "#a78bfa" }} />
+                Experimental Themes ({wildcards.length})
               </h3>
               <div className={styles.angleGrid}>
-                {wildcards.map(angle => {
-                  const winRate = angle.idea_count > 0 ? Math.round((angle.approved_count / angle.idea_count) * 100) : 0;
+                {wildcards.map((angle) => {
+                  const approvalRate =
+                    angle.idea_count > 0
+                      ? Math.round((angle.approved_count / angle.idea_count) * 100)
+                      : 0;
                   return (
                     <div key={angle.id} className={`${styles.angleCard} ${styles.angleWild}`}>
                       <div className={styles.angleCategory}>{angle.category}</div>
@@ -125,7 +133,7 @@ export default function CompanyMemory({ params }: { params: Promise<{ id: string
                       )}
                       <div className={styles.angleStats}>
                         <span>{angle.idea_count} ideas</span>
-                        <span className={styles.winRate}>{winRate}% approved</span>
+                        <span className={styles.winRate}>{approvalRate}% approval rate</span>
                       </div>
                     </div>
                   );
@@ -135,7 +143,7 @@ export default function CompanyMemory({ params }: { params: Promise<{ id: string
           )}
 
           {angles.length === 0 && (
-            <div className={styles.empty}>No angle data yet. Run ideation to populate angle memory.</div>
+            <div className={styles.empty}>No strategy data yet — generate your first batch of ideas to start tracking theme coverage.</div>
           )}
         </>
       )}
