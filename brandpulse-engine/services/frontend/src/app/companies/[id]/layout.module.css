@@ -52,6 +52,15 @@
 
 .dotActive { background: var(--status-success); }
 .dotPaused { background: var(--text-muted); }
+.dotProcessing {
+  background: var(--accent-base);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
 
 .statusText { text-transform: capitalize; }
 

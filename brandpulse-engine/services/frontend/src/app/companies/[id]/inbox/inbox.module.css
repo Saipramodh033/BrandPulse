@@ -1,6 +1,6 @@
 .container {
   display: grid;
-  grid-template-columns: 340px 1fr;
+  grid-template-columns: 360px 1fr;
   height: 100%;
   gap: 0;
   overflow: hidden;
@@ -17,14 +17,20 @@
 .tabs {
   display: flex;
   gap: 2px;
-  padding: 12px 12px 0;
+  padding: 12px 8px 0;
   border-bottom: 1px solid var(--border-light);
   background: var(--bg-secondary);
+  overflow-x: auto;
+  scrollbar-width: none; /* Firefox */
+}
+
+.tabs::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Edge */
 }
 
 .tab {
-  padding: 8px 14px;
-  font-size: 0.8rem;
+  padding: 8px 8px;
+  font-size: 0.78rem;
   font-weight: 500;
   color: var(--text-muted);
   background: transparent;
@@ -34,8 +40,9 @@
   transition: all 0.15s;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .tab:hover { color: var(--text-primary); }
@@ -711,4 +718,57 @@
   color: var(--text-muted);
   font-style: italic;
   padding-left: 18px;
+}
+
+/* Stuck agent banner */
+.stuckBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 8px;
+  font-size: 0.82rem;
+  color: var(--accent-base);
+  flex-shrink: 0;
+}
+
+.resetBtn {
+  padding: 4px 12px;
+  border-radius: 4px;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--accent-base);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.resetBtn:hover {
+  background: rgba(245, 158, 11, 0.2);
+}
+
+/* Run summary banners */
+.summarySuccess {
+  padding: 10px 14px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  color: var(--status-success);
+  font-weight: 500;
+}
+
+.summaryWarning {
+  padding: 10px 14px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  color: var(--accent-base);
+  font-weight: 500;
 }

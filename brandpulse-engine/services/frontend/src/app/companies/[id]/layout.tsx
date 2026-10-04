@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import styles from "./layout.module.css";
-import { useEffect, useState, use } from "react";
-import { API_URL } from "@/lib/api";
+import { use } from "react";
+import { useCompany } from "@/hooks/useCompanies";
 
 export default function CompanyLayout({
   children,
@@ -15,24 +15,9 @@ export default function CompanyLayout({
 }) {
   const pathname = usePathname();
   const { id } = use(params);
-  const [company, setCompany] = useState<any>(null);
+  const { data: company, isLoading } = useCompany(id);
 
-  useEffect(() => {
-    fetch(`${API_URL}/companies/${id}`)
-      .then(r => r.json())
-      .then(data => setCompany(data))
-      .catch(console.error);
-    // Refresh every 15s to update is_processing + next_run_time
-    const interval = setInterval(() => {
-      fetch(`${API_URL}/companies/${id}`)
-        .then(r => r.json())
-        .then(data => setCompany(data))
-        .catch(console.error);
-    }, 15000);
-    return () => clearInterval(interval);
-  }, [id]);
-
-  // U4 Fix: show relative time ("in 3h", "in 1d 4h") not bare clock
+  // Computes human-friendly relative duration until next run (e.g. "in 3h", "in 1d 4h")
   const formatNextRun = (isoDate: string): string => {
     const dateStr = (!isoDate.endsWith('Z') && !isoDate.includes('+') && !isoDate.includes('-', 10))
       ? isoDate + 'Z' : isoDate;
@@ -56,13 +41,24 @@ export default function CompanyLayout({
             <h2>{company ? company.name : "Loading..."}</h2>
           </div>
           <div className={styles.companyMeta}>
-            <span className={`${styles.statusDot} ${company?.status === 'active' ? styles.dotActive : styles.dotPaused}`} />
-            <span className={styles.statusText}>{company?.status || '—'}</span>
-            {company?.next_run_time && (
+            <span className={`${styles.statusDot} ${
+              company?.is_processing ? styles.dotProcessing :
+              company?.status === 'active' ? styles.dotActive : styles.dotPaused
+            }`} />
+            <span className={styles.statusText}>
+              {company?.is_processing ? 'Generating' :
+               company?.status === 'active' ? 'Scheduled' :
+               company?.status === 'paused' ? 'Paused' : '—'}
+            </span>
+            {company?.status === 'paused' ? (
+              <span className={styles.nextRun}>· Auto-generation paused</span>
+            ) : company?.is_processing ? (
+              <span className={styles.nextRun}>· Generating now…</span>
+            ) : company?.next_run_time ? (
               <span className={styles.nextRun}>
-                · Next run {formatNextRun(company.next_run_time)}
+                · Next auto-generation {formatNextRun(company.next_run_time)}
               </span>
-            )}
+            ) : null}
           </div>
         </div>
         <nav className={styles.tabs}>
